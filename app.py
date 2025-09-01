@@ -14,7 +14,7 @@ import numpy as np
 import plotly.express as px
 
 # NLP
-import spacy
+import spacy, sys, subprocess
 from collections import Counter
 
 # Embeddings
@@ -61,25 +61,44 @@ _init_state()
 def _opts_same(a: dict | None, b: dict | None) -> bool:
     return a is not None and b is not None and a == b
 
-
 # ===== Section: Cached resources =====
+import spacy, sys, subprocess
+import streamlit as st
+
 @st.cache_resource(show_spinner=False)
 def get_spacy_pipeline():
     """
-    Load a light English spaCy pipeline with tagger, attribute ruler, lemmatizer.
-    Add a sentencizer for fast rule based sentence splitting.
+    Load a light English spaCy pipeline that excludes NER and parser,
+    and ensures a fast rule based sentencizer is present.
+    On first run, if the model is missing, download it.
+    If download fails, fall back to a blank English pipeline.
     """
-    try:
+    def _load():
         nlp = spacy.load("en_core_web_sm", exclude=["ner", "parser"])
-    except Exception as e:
-        st.error(
-            "spaCy model en_core_web_sm is not available. "
-            "Install it with: python -m spacy download en_core_web_sm"
-        )
-        raise
-    if "sentencizer" not in nlp.pipe_names:
-        nlp.add_pipe("sentencizer")
-    return nlp
+        if "sentencizer" not in nlp.pipe_names:
+            nlp.add_pipe("sentencizer")
+        return nlp
+
+    try:
+        return _load()
+    except OSError:
+        with st.spinner("Downloading spaCy model en_core_web_sm…"):
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "spacy", "download", "en_core_web_sm"],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                )
+                return _load()
+            except Exception as e:
+                st.warning(
+                    "Could not download en_core_web_sm. Falling back to a blank English pipeline."
+                )
+                nlp = spacy.blank("en")
+                if "sentencizer" not in nlp.pipe_names:
+                    nlp.add_pipe("sentencizer")
+                return nlp
 
 
 @st.cache_resource(show_spinner=False)
