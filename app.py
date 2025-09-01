@@ -588,7 +588,7 @@ def npy_download(arr: np.ndarray, filename: str):
 st.set_page_config(page_title="NLPsych", layout="wide")
 st.title("NLPsych")
 st.markdown("""
-Upload a CSV file, pick your text columns, and get instant descriptive statistics, visualize semantic embeddings, and run predictive models all in one streamlined workflow.
+NLPsych (*Natural Language Psychometrics*) lets you upload a CSV file, pick your text columns, and get instant descriptive statistics, visualize semantic embeddings, and run predictive models all in one streamlined workflow.
 """)
 
 # Uploader at the top, no sidebar
