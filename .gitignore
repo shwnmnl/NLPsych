@@ -195,4 +195,3 @@ cython_debug/
 
 src
 test.ipynb
-pyproject.toml

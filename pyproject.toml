@@ -17,3 +17,17 @@ license-files = ["LICEN[CS]E*"]
 [project.urls]
 Homepage = "https://github.com/shwnmnl/NLPsych"
 Issues = "https://github.com/shwnmnl/NLPsych/issues"
+
+
+[tool.poetry]
+name = "project"
+version = "0.0.1"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+streamlit = "^1.37.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
