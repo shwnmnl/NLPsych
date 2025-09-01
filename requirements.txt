@@ -7,3 +7,4 @@ sentence-transformers>=3.0
 scikit-learn>=1.5
 umap-learn>=0.5
 statsmodels>=0.14
+en-core-web-sm>=3.7.1
