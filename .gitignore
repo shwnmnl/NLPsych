@@ -193,5 +193,7 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+.DS_Store
+
 src
 test.ipynb

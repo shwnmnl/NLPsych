@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "NLPsych"
+version = "0.1.0"
+description = "Tools for text analysis, embeddings, and lightweight modeling with a Streamlit app interface."
+readme = "README.md"
+authors = [
+  { name = "Shawn Manuel", email = "shawn.stephen.manuel@gmail.com" }
+]
+license = { text = "MIT" }
+requires-python = ">=3.9"
+
+# Dependencies needed to import and use nlpsych as a library
+dependencies = [
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "spacy>=3.7,<3.8",
+  "scikit-learn>=1.5",
+  "statsmodels>=0.14",
+  "sentence-transformers>=3.0",
+  "umap-learn>=0.5",
+  "plotly>=5.22",
+  "tabulate>=0.9.0"
+]
+
+[project.optional-dependencies]
+# Extra dependencies for running the Streamlit app
+app = [
+  "streamlit>=1.37",
+]
+
+[project.urls]
+Homepage = "https://github.com/shwnmnl/NLPsych"
+Issues = "https://github.com/shwnmnl/NLPsych/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
