@@ -1,4 +1,8 @@
-# NLPsych
+<div style="text-align:center;">
+    <img src="assets/NLPsych_logo.png" width="150">
+</div>
+
+<h1 style='text-align: center; color: white;'>NLPsych</h1>
 
 NLPsych (*Natural Language Psychometrics*) lets you upload a CSV file, pick your text columns, and get instant descriptive statistics, visualize semantic embeddings, and run predictive models all in one streamlined workflow.
 
