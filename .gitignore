@@ -195,5 +195,4 @@ cython_debug/
 
 .DS_Store
 
-src
 test.ipynb
