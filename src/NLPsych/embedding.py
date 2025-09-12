@@ -9,7 +9,7 @@ import plotly.express as px
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 
-from NLPsych.utils import get_st_model_base
+from nlpsych.utils import get_st_model_base
 
 try:
     import umap  # type: ignore

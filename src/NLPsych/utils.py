@@ -1,7 +1,10 @@
 from __future__ import annotations
 import sys, subprocess
 import spacy
+import warnings
+from functools import lru_cache
 
+@lru_cache(maxsize=1)
 def get_spacy_pipeline_base(allow_download: bool = True) -> spacy.Language:
     """
     Load a light English spaCy pipeline that excludes NER and parser,
@@ -29,6 +32,10 @@ def get_spacy_pipeline_base(allow_download: bool = True) -> spacy.Language:
                 return _load()
             except Exception:
                 pass
+            warnings.warn(
+                "Falling back to blank English pipeline (no pretrained vectors, NER, or parser).",
+                UserWarning,
+            )
             nlp = spacy.blank("en")
             if "sentencizer" not in nlp.pipe_names:
                 nlp.add_pipe("sentencizer")

@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import spacy
 from collections import Counter
-from NLPsych.utils import get_spacy_pipeline_base
+from nlpsych.utils import get_spacy_pipeline_base
 
 # ===== Section: Core text stats =====
 SplitOverall = Literal["combined", "per_column", "both"]
