@@ -1,5 +1,9 @@
 import sys
 from pathlib import Path
+import sys, os
+
+print("CWD:", os.getcwd())
+print("sys.path head:", sys.path[:5])
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"

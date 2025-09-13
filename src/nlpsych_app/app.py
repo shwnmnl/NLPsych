@@ -1,12 +1,29 @@
 from __future__ import annotations
 import io
+import sys
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import spacy 
+import base64
 from pathlib import Path
 from importlib.resources import files
+
+_here = Path(__file__).resolve()
+# usually .../<repo>/src/nlpsych_app/app.py → parents[2] is the "src" dir
+SRC = _here.parents[2]
+# fallback: search upwards for a folder literally named "src"
+if SRC.name != "src":
+    for p in _here.parents:
+        if p.name == "src":
+            SRC = p
+            break
+
+src_str = str(SRC)
+if SRC.exists() and src_str not in sys.path:
+    sys.path.insert(0, src_str)
+
 from nlpsych.utils import get_spacy_pipeline_base, get_st_model_base
 from nlpsych.descriptive_stats import spacy_descriptive_stats
 from nlpsych.embedding import (
@@ -15,9 +32,9 @@ from nlpsych.embedding import (
     build_plot_df,
     plot_projection,
 )
-import base64
 from nlpsych.modeling import auto_cv_with_permutation
 from nlpsych.report import build_report_payload
+
 
 ASSETS = files("nlpsych_app") / "assets"
 
