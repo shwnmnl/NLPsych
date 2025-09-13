@@ -1,1 +1,1 @@
--e .[app]
+NLPsych[app]==0.1.2
