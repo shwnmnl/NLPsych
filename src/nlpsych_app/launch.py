@@ -1,11 +1,14 @@
-import sys
-import subprocess
+import os, sys, subprocess
 from importlib.resources import files
 
 def main():
-    """Console entry point: launches the packaged Streamlit app."""
+    # Respect user config if set; otherwise point to packaged config
+    if "STREAMLIT_CONFIG_DIR" not in os.environ:
+        cfg_dir = files("nlpsych_app") / ".streamlit"
+        os.environ["STREAMLIT_CONFIG_DIR"] = str(cfg_dir)
+
     app_path = files("nlpsych_app") / "app.py"
-    # Pass through any extra CLI args to Streamlit (e.g., --server.port 8502)
-    args = [sys.executable, "-m", "streamlit", "run", str(app_path), *sys.argv[1:]]
-    # Use check=True so non-zero exit codes surface to the shell
-    subprocess.run(args, check=True)
+    subprocess.run(
+        [sys.executable, "-m", "streamlit", "run", str(app_path), *sys.argv[1:]],
+        check=True,
+    )

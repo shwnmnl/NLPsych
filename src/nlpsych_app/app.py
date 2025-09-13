@@ -65,17 +65,29 @@ def main():
         buf.seek(0)
         st.download_button("Download NPY", data=buf, file_name=filename, mime="application/octet-stream")
 
+    # ===== Logo loading helper =====
+    def load_logo_bytes(filename="NLPsych_logo.png") -> bytes:
+        # 1) Dev/repo path for local runs
+        dev_path = Path(__file__).resolve().parents[2] / "assets" / filename
+        if dev_path.exists():
+            return dev_path.read_bytes()
+
+        # 2) Packaged asset for pip installs
+        pkg_res = files("nlpsych_app") / "assets" / filename
+        with pkg_res.open("rb") as f:
+            return f.read()
+
     # ===== Section: Streamlit UI =====
     # Page config and title
-    st.set_page_config(page_title="NLPsych", page_icon=":brain:", layout="centered")
+    st.set_page_config(page_title="NLPsych", page_icon="💬", layout="centered")
     # Centered logo
-    with open("assets/NLPsych_logo.png", "rb") as f:
-        data = base64.b64encode(f.read()).decode("utf-8")
+    logo_b = load_logo_bytes("NLPsych_logo.png")
+    data_uri = "data:image/png;base64," + base64.b64encode(logo_b).decode("utf-8")
     st.markdown(
         f"""
-        <div style="text-align:center;">
-            <img src="data:image/png;base64,{data}" width="150">
-        </div>
+        <p style="text-align:center;">
+            <img src="{data_uri}" width="150">
+        </p>
         """,
         unsafe_allow_html=True
     )
@@ -451,3 +463,6 @@ def main():
                     file_name="nlpsych_report.md",
                     mime="text/markdown"
                 )
+
+if __name__ == "__main__":
+    main()

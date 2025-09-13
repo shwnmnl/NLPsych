@@ -1,1 +1,2 @@
 recursive-include src/nlpsych_app/assets *
+recursive-include src/nlpsych_app/.streamlit *
