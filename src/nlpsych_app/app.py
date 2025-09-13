@@ -6,6 +6,7 @@ import numpy as np
 import plotly.express as px
 import spacy 
 from pathlib import Path
+from importlib.resources import files
 from nlpsych.utils import get_spacy_pipeline_base, get_st_model_base
 from nlpsych.descriptive_stats import spacy_descriptive_stats
 from nlpsych.embedding import (
@@ -18,9 +19,7 @@ import base64
 from nlpsych.modeling import auto_cv_with_permutation
 from nlpsych.report import build_report_payload
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-ASSETS = REPO_ROOT / "assets"
-
+ASSETS = files("nlpsych_app") / "assets"
 
 def main():
     # ===== Session state init =====

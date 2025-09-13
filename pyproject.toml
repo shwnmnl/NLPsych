@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "NLPsych"
-version = "0.1.0"
+version = "0.1.2a2"
 description = "Tools for text analysis, embeddings, and lightweight modeling with a Streamlit app interface."
 readme = "README.md"
 authors = [
@@ -39,6 +39,7 @@ dependencies = [
 app = [
   "streamlit>=1.37",
 ]
+dev = ["pytest>=8", "ruff>=0.5", "black>=24"]
 
 [project.urls]
 Homepage = "https://github.com/shwnmnl/NLPsych"
@@ -46,6 +47,14 @@ Issues = "https://github.com/shwnmnl/NLPsych/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["nlpsych*", "nlpsych_app*"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.package-data]
+nlpsych_app = ["assets/*"]
+
+[project.scripts]
+nlpsych-app = "nlpsych_app.launch:main"
