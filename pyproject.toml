@@ -37,7 +37,7 @@ dependencies = [
 [project.optional-dependencies]
 # Extra dependencies for running the Streamlit app
 app = [
-  "streamlit>=1.37",
+  "streamlit>=1.39",
 ]
 dev = ["pytest>=8", "ruff>=0.5", "black>=24"]
 
