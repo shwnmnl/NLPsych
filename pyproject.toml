@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "NLPsych"
-version = "0.1.2"
+version = "0.1.3"
 description = "Tools for text analysis, embeddings, and lightweight modeling with a Streamlit app interface."
 readme = "README.md"
 authors = [
