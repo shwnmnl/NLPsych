@@ -133,7 +133,7 @@ def main():
             st.stop()
 
     st.write("Preview")
-    st.dataframe(df.head(), use_container_width=True)
+    st.dataframe(df.head(), width='stretch')
 
     # Column selection just once, used by tabs
     candidate_text_cols = [c for c in df.columns if df[c].dtype == object]
@@ -193,7 +193,7 @@ def main():
 
         if cache_is_fresh and not recompute and not run_stats:
             st.write("Per row stats")
-            st.dataframe(cached_df, use_container_width=True)
+            st.dataframe(cached_df, width='stretch')
             df_to_csv_download(cached_df, "per_row_stats.csv")
             st.write("Overall stats")
             st.json(cached_overall)
@@ -213,7 +213,7 @@ def main():
                     avg_sentence_mode=avg_sent_mode
                 )
                 st.write("Per row stats")
-                st.dataframe(stats_df, use_container_width=True)
+                st.dataframe(stats_df, width='stretch')
                 df_to_csv_download(stats_df, "per_row_stats.csv")
                 st.write("Overall stats")
                 st.json(overall)
@@ -228,7 +228,7 @@ def main():
                 st.info("Press Compute to generate stats.")
             else:
                 st.write("Per row stats")
-                st.dataframe(cached_df, use_container_width=True)
+                st.dataframe(cached_df, width='stretch')
                 df_to_csv_download(cached_df, "per_row_stats.csv")
                 st.write("Overall stats")
                 st.json(cached_overall)
@@ -278,9 +278,9 @@ def main():
 
         def _render_embed_block(plot_df, emb, meta_df):
             fig = plot_projection(plot_df, n_components=plot_df.filter(like="dim_").shape[1], color_by="source_column", point_size=8)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             st.write("Projection coordinates")
-            st.dataframe(plot_df.head(), use_container_width=True)
+            st.dataframe(plot_df.head(), width='stretch')
             df_to_csv_download(plot_df, "projection.csv")
             st.write("Raw embeddings")
             npy_download(emb, "embeddings.npy")
@@ -368,7 +368,7 @@ def main():
 
         def _render_model_results(results_df: pd.DataFrame):
             st.write("Results")
-            st.dataframe(results_df, use_container_width=True)
+            st.dataframe(results_df, width='stretch')
             df_to_csv_download(results_df, "model_results.csv")
             if len(results_df):
                 first = results_df.iloc[0]
@@ -378,7 +378,7 @@ def main():
                 if isinstance(perm_scores, list) and len(perm_scores):
                     fig_hist = px.histogram(x=perm_scores, nbins=30, title=f"Permutation scores for {tgt}")
                     fig_hist.add_vline(x=observed)
-                    st.plotly_chart(fig_hist, use_container_width=True)
+                    st.plotly_chart(fig_hist, width='stretch')
 
         if cache_fresh and not recompute_model and not run_model:
             _render_model_results(cached_results)

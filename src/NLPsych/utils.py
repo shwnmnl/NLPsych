@@ -52,12 +52,4 @@ def get_st_model_base(model_name: str = "all-MiniLM-L6-v2", allow_download: bool
     except Exception as e:
         raise RuntimeError(
             f"SentenceTransformer model {model_name} not found locally and downloads are disabled."
-        )
-    
-    else:
-        try:
-            return SentenceTransformer(model_name)
-        except Exception:
-            raise RuntimeError(
-                f"Model {model_name} not found locally and downloads are disabled."
-            )
+        ) from e
