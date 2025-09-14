@@ -100,7 +100,7 @@ def main():
 
     # Uploader at the top, no sidebar
     uploaded = st.file_uploader("Upload CSV", type=["csv"])
-    use_demo = st.checkbox("Use demo data if no file", value=True)
+    use_demo = st.checkbox("Use demo data if no file", value=False)
 
     # Load data
     if uploaded is not None:

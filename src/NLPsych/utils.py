@@ -30,16 +30,14 @@ def get_spacy_pipeline_base(allow_download: bool = True) -> spacy.Language:
                     stderr=subprocess.STDOUT,
                 )
                 return _load()
-            except Exception:
-                pass
-            warnings.warn(
-                "Falling back to blank English pipeline (no pretrained vectors, NER, or parser).",
-                UserWarning,
-            )
-            nlp = spacy.blank("en")
-            if "sentencizer" not in nlp.pipe_names:
-                nlp.add_pipe("sentencizer")
-            return nlp
+            except Exception as e:
+                raise RuntimeError(
+                    "Failed to download spaCy model en_core_web_sm. "
+                ) from e
+        raise RuntimeError(
+            "spaCy model en_core_web_sm not installed"
+        )
+
         
 def get_st_model_base(model_name: str = "all-MiniLM-L6-v2", allow_download: bool = True) -> SentenceTransformer:
     try:
@@ -49,10 +47,17 @@ def get_st_model_base(model_name: str = "all-MiniLM-L6-v2", allow_download: bool
     
     if allow_download:
         return SentenceTransformer(model_name)
+    try:
+        return SentenceTransformer(model_name)
+    except Exception as e:
+        raise RuntimeError(
+            f"SentenceTransformer model {model_name} not found locally and downloads are disabled."
+        )
+    
     else:
         try:
             return SentenceTransformer(model_name)
         except Exception:
-            raise RunTimeError(
+            raise RuntimeError(
                 f"Model {model_name} not found locally and downloads are disabled."
             )
