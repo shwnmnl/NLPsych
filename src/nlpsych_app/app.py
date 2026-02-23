@@ -22,6 +22,14 @@ from nlpsych.report import build_report_payload
 
 
 ASSETS = files("nlpsych_app") / "assets"
+EMBEDDING_MODEL_OPTIONS = [
+    "all-MiniLM-L6-v2",
+    "all-mpnet-base-v2",
+    "all-distilroberta-v1",
+    "paraphrase-multilingual-MiniLM-L12-v2",
+    "paraphrase-multilingual-mpnet-base-v2",
+    "distiluse-base-multilingual-cased-v2",
+]
 
 def main():
     # ===== Session state init =====
@@ -240,7 +248,20 @@ def main():
 
         col_a, col_b, col_c = st.columns(3)
         with col_a:
-            model_name = st.text_input("SentenceTransformer model", "all-MiniLM-L6-v2")
+            embed_model_options = EMBEDDING_MODEL_OPTIONS + ["Custom"]
+            model_choice = st.selectbox(
+                "SentenceTransformer model",
+                embed_model_options,
+                index=0
+            )
+            if model_choice == "Custom":
+                custom_embed_model = st.text_input(
+                    "Custom SentenceTransformer model",
+                    EMBEDDING_MODEL_OPTIONS[0]
+                ).strip()
+                model_name = custom_embed_model or EMBEDDING_MODEL_OPTIONS[0]
+            else:
+                model_name = model_choice
         with col_b:
             reduce_method = st.selectbox("Reduction method", ["pca", "umap", "tsne"])
         with col_c:
@@ -338,7 +359,20 @@ def main():
         with col_d:
             reuse_embed = st.checkbox("Reuse cached embeddings if available", value=True)
         with col_e:
-            model_name_modeling = st.text_input("SentenceTransformer model for modeling", "all-MiniLM-L6-v2")
+            modeling_model_options = EMBEDDING_MODEL_OPTIONS + ["Custom"]
+            modeling_choice = st.selectbox(
+                "SentenceTransformer model for modeling",
+                modeling_model_options,
+                index=0
+            )
+            if modeling_choice == "Custom":
+                custom_modeling_model = st.text_input(
+                    "Custom modeling SentenceTransformer model",
+                    EMBEDDING_MODEL_OPTIONS[0]
+                ).strip()
+                model_name_modeling = custom_modeling_model or EMBEDDING_MODEL_OPTIONS[0]
+            else:
+                model_name_modeling = modeling_choice
 
         model_opts_current = {
             "target_cols": tuple(target_cols),
