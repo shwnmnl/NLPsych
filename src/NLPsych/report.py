@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional, List, Tuple 
+from typing import Optional, List, Tuple, Dict, Any
 
 import pandas as pd
 import numpy as np
@@ -91,12 +91,42 @@ def _df_to_markdown_safe(df: pd.DataFrame, index: bool = False) -> str:
     except Exception:
         return df.to_string(index=index)
 
+def _stringify_config_value(val: Any) -> str:
+    if val is None:
+        return "None"
+    if isinstance(val, (list, tuple, set)):
+        return ", ".join(str(v) for v in val)
+    if isinstance(val, dict):
+        return ", ".join(f"{k}={v}" for k, v in val.items())
+    return str(val)
+
+def _config_to_df(config: Optional[Dict[str, Any]], exclude_keys: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
+    if not config:
+        return None
+    exclude = set(exclude_keys or [])
+    rows = []
+    for k in sorted(config.keys()):
+        if k in exclude:
+            continue
+        v = config[k]
+        if v is None:
+            continue
+        if isinstance(v, (list, tuple, set)) and not v:
+            continue
+        rows.append([k, _stringify_config_value(v)])
+    if not rows:
+        return None
+    return pd.DataFrame(rows, columns=["Setting", "Value"])
+
 def build_report_payload(
     text_cols: list[str],
     stats_df: Optional[pd.DataFrame],
     overall_obj: Optional[dict],
     plot_df: Optional[pd.DataFrame],
-    results_df: Optional[pd.DataFrame]
+    results_df: Optional[pd.DataFrame],
+    stats_config: Optional[Dict[str, Any]] = None,
+    embed_config: Optional[Dict[str, Any]] = None,
+    model_config: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, str]:
     """Returns HTML and Markdown versions of the same report."""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -116,18 +146,33 @@ def build_report_payload(
         ]
     stats_table_df = pd.DataFrame(stats_rows, columns=["Metric", "Value"]) if stats_rows else None
     stats_interps = interpret_stats(stats_overall) if stats_overall else []
+    stats_cfg_df = _config_to_df(stats_config)
 
     # Embeddings quick note
     emb_note = None
     if plot_df is not None and len(plot_df):
         dims = 3 if "dim_3" in plot_df.columns else 2
         emb_note = f"Projection computed with {dims} dimensions. Downloadable files are available from the Embeddings tab."
+    embed_method = None
+    if isinstance(embed_config, dict):
+        embed_method = embed_config.get("reduce_method")
+    if embed_method == "pca":
+        emb_exclude = ["umap_metric", "tsne_metric"]
+    elif embed_method == "umap":
+        emb_exclude = ["tsne_metric"]
+    elif embed_method == "tsne":
+        emb_exclude = ["umap_metric"]
+    else:
+        emb_exclude = []
+    emb_cfg_df = _config_to_df(embed_config, exclude_keys=emb_exclude)
 
     # Modeling table and interpretations
     model_table_df = None
     model_interps: List[Tuple[str, List[str]]] = []
     if results_df is not None and len(results_df):
         show_cols = ["target", "task", "metric_name", "observed", "p_value", "p_fdr", "cv_folds_used"]
+        extra_cols = [c for c in results_df.columns if c.startswith("metric_") and c != "metric_name"]
+        show_cols.extend(extra_cols)
         show_cols = [c for c in show_cols if c in results_df.columns]
         model_table_df = results_df[show_cols].copy()
         model_table_df["observed"] = model_table_df["observed"].astype(float).round(3)
@@ -140,6 +185,7 @@ def build_report_payload(
             tgt = str(row.get("target", "unknown"))
             bullets = interpret_model_row(row)
             model_interps.append((tgt, bullets))
+    model_cfg_df = _config_to_df(model_config)
 
     # HTML with light CSS
     css = """<style>
@@ -185,6 +231,9 @@ def build_report_payload(
             for s in stats_interps:
                 html_parts.append(f'<li>{s}</li>')
             html_parts.append('</ul>')
+        if stats_cfg_df is not None:
+            html_parts.append('<p><strong>Configuration</strong></p>')
+            html_parts.append(_to_html_table(stats_cfg_df, index=False))
     html_parts.append('</div>')
 
     # Embeddings card
@@ -194,6 +243,9 @@ def build_report_payload(
         html_parts.append('<p class="muted">No embeddings or projection were available. Run the Embeddings tab first.</p>')
     else:
         html_parts.append(f'<p>{emb_note}</p>')
+        if emb_cfg_df is not None:
+            html_parts.append('<p><strong>Configuration</strong></p>')
+            html_parts.append(_to_html_table(emb_cfg_df, index=False))
     html_parts.append('</div>')
 
     # Modeling card
@@ -203,6 +255,9 @@ def build_report_payload(
         html_parts.append('<p class="muted">No modeling results were available. Run the Modeling tab first.</p>')
     else:
         html_parts.append(_to_html_table(model_table_df, index=False))
+        if model_cfg_df is not None:
+            html_parts.append('<p><strong>Configuration</strong></p>')
+            html_parts.append(_to_html_table(model_cfg_df, index=False))
         if model_interps:
             html_parts.append('<p><strong>Interpretation per target</strong></p>')
             html_parts.append('<ul>')
@@ -236,17 +291,26 @@ def build_report_payload(
             md_parts.append("Interpretation")
             for s in stats_interps:
                 md_parts.append(f"* {s}")
+        if stats_cfg_df is not None:
+            md_parts.append("Configuration")
+            md_parts.append(_df_to_markdown_safe(stats_cfg_df, index=False))
 
     md_parts.append("\n## Embeddings and projection")
     if emb_note is None:
         md_parts.append("No embeddings or projection were available. Run the Embeddings tab first.")
     else:
         md_parts.append(emb_note)
+        if emb_cfg_df is not None:
+            md_parts.append("Configuration")
+            md_parts.append(_df_to_markdown_safe(emb_cfg_df, index=False))
     md_parts.append("\n## Modeling results")
     if model_table_df is None:
         md_parts.append("No modeling results were available. Run the Modeling tab first.")
     else:
         md_parts.append(_df_to_markdown_safe(model_table_df, index=False))
+        if model_cfg_df is not None:
+            md_parts.append("Configuration")
+            md_parts.append(_df_to_markdown_safe(model_cfg_df, index=False))
         md_parts.append("Interpretation per target")
         for tgt, bullets in model_interps:
             md_parts.append(f"* {tgt}")
@@ -255,4 +319,3 @@ def build_report_payload(
 
     md_report = "\n\n".join(md_parts)
     return html_report, md_report
-
