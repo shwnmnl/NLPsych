@@ -31,7 +31,7 @@ nlpsych-app
 ## 🛠 Example Usage (library)
 ```python
 import pandas as pd
-from nlpsych.descriptive_stats import spacy_descriptive_stats
+from nlpsych.descriptive_stats import descriptive_stats
 from nlpsych.embedding import embed_text_columns_simple_base, reduce_embeddings
 
 df = pd.DataFrame({"text": [
@@ -39,7 +39,7 @@ df = pd.DataFrame({"text": [
     "Patient denies chest pain. Vitals stable."
 ]})
 
-stats_df, overall = spacy_descriptive_stats(df["text"])
+stats_df, overall = descriptive_stats(df["text"])
 print(overall["lexical_diversity"])
 
 meta_df, emb, texts = embed_text_columns_simple_base([df["text"]])

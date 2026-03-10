@@ -45,42 +45,251 @@ def interpret_stats(overall: dict) -> list[str]:
                 out.append("Verb to noun ratio is high which can indicate action oriented style.")
     return out
 
-def interpret_model_row(row: pd.Series) -> list[str]:
+
+def _has_nonempty(val: Any) -> bool:
+    if val is None:
+        return False
+    if isinstance(val, (str, bytes)):
+        return bool(str(val).strip())
+    if isinstance(val, (list, tuple, set, dict)):
+        return len(val) > 0
+    return True
+
+
+def _pairs_to_dict(val: Any) -> Dict[str, str]:
+    if isinstance(val, dict):
+        return {str(k): str(v) for k, v in val.items()}
+    if isinstance(val, (list, tuple)):
+        out: Dict[str, str] = {}
+        for item in val:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                out[str(item[0])] = str(item[1])
+        return out
+    return {}
+
+
+def _advanced_settings_notes(model_config: Optional[Dict[str, Any]], target: Optional[str] = None) -> List[str]:
+    if not isinstance(model_config, dict):
+        return []
+
+    notes: List[str] = []
+
+    feature_selection = str(model_config.get("feature_selection", "")).strip().lower()
+    if feature_selection and feature_selection != "none":
+        if feature_selection == "kbest":
+            notes.append(f"KBest feature selection (k={model_config.get('k_best')})")
+        elif feature_selection == "percentile":
+            notes.append(f"Percentile feature selection ({model_config.get('percentile')}%)")
+        elif feature_selection in {"variance threshold", "variance"}:
+            notes.append(f"variance-threshold feature selection ({model_config.get('variance_threshold')})")
+        else:
+            notes.append(f"feature selection ({feature_selection})")
+
+    reduce_method = model_config.get("reduce_method")
+    if isinstance(reduce_method, str) and reduce_method.strip():
+        method = reduce_method.strip().lower()
+        if method == "pca":
+            n_components = model_config.get("reduce_n_components")
+            if n_components is not None:
+                notes.append(f"PCA dimensionality reduction (n_components={n_components})")
+            else:
+                notes.append("PCA dimensionality reduction")
+        else:
+            notes.append(f"{reduce_method} dimensionality reduction")
+
+    if bool(model_config.get("tune_hyperparams")):
+        grid_parts: List[str] = []
+        if _has_nonempty(model_config.get("classifier_param_grid")):
+            grid_parts.append("classifier grid")
+        if _has_nonempty(model_config.get("regressor_param_grid")):
+            grid_parts.append("regressor grid")
+        if _has_nonempty(model_config.get("reduce_components_grid")):
+            grid_parts.append("reduction grid")
+        if _has_nonempty(model_config.get("k_best_grid")) or _has_nonempty(model_config.get("percentile_grid")) or _has_nonempty(model_config.get("variance_threshold_grid")):
+            grid_parts.append("feature-selection grid")
+        if grid_parts:
+            notes.append(f"hyperparameter tuning with custom {', '.join(grid_parts)}")
+        else:
+            notes.append("light-grid hyperparameter tuning")
+
+    group_col = model_config.get("group_col")
+    if isinstance(group_col, str) and group_col.strip():
+        notes.append(f"group-aware CV using {group_col}")
+
+    target_name = str(target) if target is not None else None
+    override_map = _pairs_to_dict(model_config.get("target_task_overrides"))
+    if target_name and target_name in override_map:
+        notes.append(f"explicit task override ({override_map[target_name]}) for this target")
+    else:
+        task_mode = str(model_config.get("task_mode", "")).strip().lower()
+        if task_mode in {"classification", "regression"}:
+            notes.append(f"forced task mode ({task_mode})")
+
+    return notes
+
+
+def interpret_model_row(row: pd.Series, model_config: Optional[Dict[str, Any]] = None) -> list[str]:
     out: List[str] = []
     metric = str(row.get("metric_name", "")).upper()
-    score = float(row.get("observed", 0.0))
-    p = float(row.get("p_value", 1.0))
-    p_fdr = float(row.get("p_fdr", 1.0))
+    score_raw = row.get("observed", np.nan)
+    score = float(score_raw) if pd.notnull(score_raw) else np.nan
+    p_raw = row.get("p_value", np.nan)
+    p = float(p_raw) if pd.notnull(p_raw) else np.nan
+    p_adjusted = row.get("p_adjusted", np.nan)
+    p_adjust_method = row.get("p_adjust_method", None)
+    if (p_adjust_method is None or p_adjust_method == "" or pd.isna(p_adjust_method)):
+        legacy_fdr = row.get("p_fdr", np.nan)
+        if pd.notnull(legacy_fdr):
+            p_adjusted = legacy_fdr if pd.isna(p_adjusted) else p_adjusted
+            p_adjust_method = "fdr_bh"
     folds = int(row.get("cv_folds_used", 0)) if pd.notnull(row.get("cv_folds_used", np.nan)) else None
     task = row.get("task", "classification")
 
-    if task == "classification":
-        if score >= 0.80:
-            out.append(f"{metric} indicates strong discrimination.")
-        elif score >= 0.60:
-            out.append(f"{metric} indicates moderate discrimination.")
-        else:
-            out.append(f"{metric} indicates weak discrimination.")
+    if pd.isna(score):
+        out.append(
+            f"{metric} is undefined for at least one fold (often due to too few test samples). "
+            "Consider fewer CV folds."
+        )
     else:
-        if score >= 0.50:
-            out.append(f"{metric} indicates strong fit.")
-        elif score >= 0.20:
-            out.append(f"{metric} indicates moderate fit.")
-        elif score >= 0.00:
-            out.append(f"{metric} indicates weak fit.")
+        if task == "classification":
+            if score >= 0.80:
+                out.append(f"{metric} indicates strong discrimination.")
+            elif score >= 0.60:
+                out.append(f"{metric} indicates moderate discrimination.")
+            else:
+                out.append(f"{metric} indicates weak discrimination.")
         else:
-            out.append(f"{metric} is negative which is worse than a constant baseline and suggests poor generalization.")
+            if score >= 0.50:
+                out.append(f"{metric} indicates strong fit.")
+            elif score >= 0.20:
+                out.append(f"{metric} indicates moderate fit.")
+            elif score >= 0.00:
+                out.append(f"{metric} indicates weak fit.")
+            else:
+                out.append(f"{metric} is negative which is worse than a constant baseline and suggests poor generalization.")
 
-    if p_fdr < 0.05:
-        out.append("Permutation test with FDR correction indicates a statistically reliable effect.")
-    elif p < 0.05:
-        out.append("Permutation test is nominally significant but not after FDR correction.")
+    method_label = None
+    if p_adjust_method:
+        method_map = {
+            "fdr_bh": "FDR (Benjamini–Hochberg)",
+            "fdr_by": "FDR (Benjamini–Yekutieli)",
+            "bonferroni": "Bonferroni",
+            "holm": "Holm",
+            "sidak": "Sidak",
+            "hochberg": "Hochberg",
+            "hommel": "Hommel",
+        }
+        method_label = method_map.get(str(p_adjust_method).lower(), str(p_adjust_method))
+
+    if pd.isna(p):
+        out.append("Permutation test result is unavailable.")
+    elif method_label and pd.notnull(p_adjusted):
+        if float(p_adjusted) < 0.05:
+            if task == "regression" and metric == "R2" and pd.notnull(score) and score < 0:
+                out.append(
+                    f"Permutation test with {method_label} correction is statistically reliable, "
+                    "but negative R2 indicates poor predictive performance."
+                )
+            else:
+                out.append(f"Permutation test with {method_label} correction indicates a statistically reliable effect.")
+        elif p < 0.05:
+            out.append(f"Permutation test is nominally significant but not after {method_label} correction.")
+        else:
+            out.append("Permutation test does not indicate statistical significance.")
     else:
-        out.append("Permutation test does not indicate statistical significance.")
+        if p < 0.05:
+            if task == "regression" and metric == "R2" and pd.notnull(score) and score < 0:
+                out.append(
+                    "Permutation test is nominally significant, but negative R2 indicates poor predictive performance."
+                )
+            else:
+                out.append("Permutation test is nominally significant (no multiple-comparisons correction).")
+        else:
+            out.append("Permutation test does not indicate statistical significance.")
 
     if folds is not None and folds > 0:
         out.append(f"Cross validation used {folds} folds.")
+
+    target = str(row.get("target", "target"))
+    advanced_notes = _advanced_settings_notes(model_config, target=target)
+    if advanced_notes:
+        out.append(f"Advanced settings used: {'; '.join(advanced_notes)}.")
+
     return out
+
+
+def summarize_model_row(
+    row: pd.Series,
+    include_adjusted: bool = True,
+    model_config: Optional[Dict[str, Any]] = None,
+) -> str:
+    target = str(row.get("target", "target"))
+    task = str(row.get("task", "classification"))
+    metric = str(row.get("metric_name", "score")).upper()
+    score_raw = row.get("observed", np.nan)
+    score = float(score_raw) if pd.notnull(score_raw) else np.nan
+    p_raw = row.get("p_value", np.nan)
+    p = float(p_raw) if pd.notnull(p_raw) else np.nan
+    folds_val = row.get("cv_folds_used", np.nan)
+    folds = int(folds_val) if pd.notnull(folds_val) else None
+
+    p_adjusted = row.get("p_adjusted", np.nan)
+    p_adjust_method = row.get("p_adjust_method", None)
+    if (p_adjust_method is None or p_adjust_method == "" or pd.isna(p_adjust_method)):
+        legacy_fdr = row.get("p_fdr", np.nan)
+        if pd.notnull(legacy_fdr):
+            p_adjusted = legacy_fdr if pd.isna(p_adjusted) else p_adjusted
+            p_adjust_method = "fdr_bh"
+
+    task_label = "classification" if task == "classification" else "regression"
+    parts: List[str] = [f"For target {target}, we ran a {task_label} model"]
+    if folds is not None and folds > 0:
+        parts[-1] += f" with {folds}-fold cross validation"
+    parts[-1] += "."
+
+    if pd.notnull(score):
+        parts.append(f"The observed {metric} was {score:.3f}.")
+    else:
+        parts.append(f"The observed {metric} was undefined in at least one fold.")
+
+    if pd.notnull(p):
+        use_adjusted = bool(include_adjusted and p_adjust_method and pd.notnull(p_adjusted))
+        if use_adjusted:
+            if float(p_adjusted) < 0.05:
+                if task == "regression" and metric == "R2" and pd.notnull(score) and score < 0:
+                    finding = (
+                        "suggesting a statistically reliable difference from permutations, "
+                        "but with poor predictive performance because R2 is negative"
+                    )
+                else:
+                    finding = "suggesting a statistically reliable effect after multiple-comparisons correction"
+            elif p < 0.05:
+                finding = "showing nominal significance that did not survive multiple-comparisons correction"
+            else:
+                finding = "indicating no statistically reliable effect"
+            parts.append(
+                f"Permutation testing gave p={p:.4f} and adjusted p={float(p_adjusted):.4f} ({p_adjust_method}), {finding}."
+            )
+        else:
+            if p < 0.05:
+                if task == "regression" and metric == "R2" and pd.notnull(score) and score < 0:
+                    finding = (
+                        "suggesting a statistically reliable difference from permutations, "
+                        "but with poor predictive performance because R2 is negative"
+                    )
+                else:
+                    finding = "suggesting a statistically reliable effect"
+            else:
+                finding = "indicating no statistically reliable effect"
+            parts.append(f"Permutation testing gave p={p:.4f}, {finding}.")
+    else:
+        parts.append("Permutation testing was unavailable.")
+
+    advanced_notes = _advanced_settings_notes(model_config, target=target)
+    if advanced_notes:
+        parts.append(f"Advanced settings used: {'; '.join(advanced_notes)}.")
+
+    return " ".join(parts)
 
 def _to_html_table(df: pd.DataFrame, index: bool = False) -> str:
     return df.to_html(index=index, classes="table", border=0, float_format=lambda x: f"{x:.3f}" if isinstance(x, float) else x)
@@ -168,9 +377,17 @@ def build_report_payload(
 
     # Modeling table and interpretations
     model_table_df = None
-    model_interps: List[Tuple[str, List[str]]] = []
+    model_interps: List[Tuple[str, List[str], str]] = []
     if results_df is not None and len(results_df):
-        show_cols = ["target", "task", "metric_name", "observed", "p_value", "p_fdr", "cv_folds_used"]
+        show_cols = ["target", "task", "metric_name", "observed", "p_value", "cv_folds_used"]
+        p_adjust_available = "p_adjusted" in results_df.columns and results_df["p_adjusted"].notna().any()
+        p_fdr_available = "p_fdr" in results_df.columns and results_df["p_fdr"].notna().any()
+        if p_adjust_available:
+            show_cols.insert(5, "p_adjusted")
+        elif p_fdr_available:
+            show_cols.insert(5, "p_fdr")
+        if "p_adjust_method" in results_df.columns and results_df["p_adjust_method"].notna().any():
+            show_cols.insert(6, "p_adjust_method")
         extra_cols = [c for c in results_df.columns if c.startswith("metric_") and c != "metric_name"]
         show_cols.extend(extra_cols)
         show_cols = [c for c in show_cols if c in results_df.columns]
@@ -179,12 +396,20 @@ def build_report_payload(
 
         if "p_value" in model_table_df:
             model_table_df["p_value"] = model_table_df["p_value"].astype(float).round(4)
+        if "p_adjusted" in model_table_df:
+            model_table_df["p_adjusted"] = model_table_df["p_adjusted"].astype(float).round(4)
         if "p_fdr" in model_table_df:
             model_table_df["p_fdr"] = model_table_df["p_fdr"].astype(float).round(4)
+        include_adjusted_in_writeup = len(results_df) > 1
         for _, row in results_df.iterrows():
             tgt = str(row.get("target", "unknown"))
-            bullets = interpret_model_row(row)
-            model_interps.append((tgt, bullets))
+            bullets = interpret_model_row(row, model_config=model_config)
+            summary_sentence = summarize_model_row(
+                row,
+                include_adjusted=include_adjusted_in_writeup,
+                model_config=model_config,
+            )
+            model_interps.append((tgt, bullets, summary_sentence))
     model_cfg_df = _config_to_df(model_config)
 
     # HTML with light CSS
@@ -261,13 +486,14 @@ def build_report_payload(
         if model_interps:
             html_parts.append('<p><strong>Interpretation per target</strong></p>')
             html_parts.append('<ul>')
-            for tgt, bullets in model_interps:
+            for tgt, bullets, summary_sentence in model_interps:
                 html_parts.append(f'<li><strong>{tgt}</strong>')
                 if bullets:
                     html_parts.append('<ul>')
                     for b in bullets:
                         html_parts.append(f'<li>{b}</li>')
                     html_parts.append('</ul>')
+                html_parts.append(f'<p><em>Example write-up sentence: {summary_sentence}</em></p>')
                 html_parts.append('</li>')
             html_parts.append('</ul>')
     html_parts.append('</div>')
@@ -312,10 +538,11 @@ def build_report_payload(
             md_parts.append("Configuration")
             md_parts.append(_df_to_markdown_safe(model_cfg_df, index=False))
         md_parts.append("Interpretation per target")
-        for tgt, bullets in model_interps:
+        for tgt, bullets, summary_sentence in model_interps:
             md_parts.append(f"* {tgt}")
             for b in bullets:
                 md_parts.append(f"  * {b}")
+            md_parts.append(f"  * *Example write-up sentence: {summary_sentence}*")
 
     md_report = "\n\n".join(md_parts)
     return html_report, md_report

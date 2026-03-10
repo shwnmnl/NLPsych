@@ -88,6 +88,23 @@ def main() -> None:
             st.page_link("app.py", label="Back to App", icon="🏠")
         except Exception:
             st.markdown("[Back to App](/)")
+        st.markdown("---")
+        st.markdown("📘 Docs")
+        doc_sections = [
+            ("Overview", "overview"),
+            ("Beginner Tutorial (Non-ML)", "beginner-tutorial-non-ml"),
+            ("Feature Highlights", "feature-highlights"),
+            ("Architecture", "architecture"),
+            ("Installation", "installation"),
+            ("Quickstart (Library)", "quickstart-library"),
+            ("Streamlit App", "streamlit-app"),
+            ("Module Reference", "module-reference"),
+            ("Data Flow: Text → Report", "data-flow-text--report"),
+            ("Testing & Quality", "testing--quality"),
+            ("Support & Contributing", "support--contributing"),
+        ]
+        links_md = "\n".join(f"- [{label}](Docs#{anchor})" for label, anchor in doc_sections)
+        st.markdown(links_md)
 
     md = _load_docs_markdown()
     st.markdown(md)

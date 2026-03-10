@@ -9,7 +9,7 @@ from nlpsych.utils import get_spacy_pipeline_base
 # ===== Section: Core text stats =====
 SplitOverall = Literal["combined", "per_column", "both"]
 
-def spacy_descriptive_stats(
+def descriptive_stats(
     *series_list: Iterable[pd.Series],
     use_lemmas_for_uniques: bool = True,
     split_overall: SplitOverall = "combined",
@@ -175,4 +175,3 @@ def spacy_descriptive_stats(
             per_col[col] = compute_overall(subdf.index)
         return stats_df, {"combined": compute_overall(stats_df.index), "per_column": per_col}
     return stats_df, compute_overall(stats_df.index)
-

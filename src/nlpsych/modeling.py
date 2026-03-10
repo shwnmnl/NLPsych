@@ -21,7 +21,11 @@ from sklearn.metrics import (
     r2_score,
     recall_score,
 )
-from sklearn.model_selection import GridSearchCV, KFold, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, KFold, StratifiedKFold, GroupKFold
+try:
+    from sklearn.model_selection import StratifiedGroupKFold
+except Exception:
+    StratifiedGroupKFold = None
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.feature_selection import (
@@ -47,6 +51,8 @@ class TargetResult:
     cv_scores: List[float]
     perm_scores: List[float]
     cv_folds_used: int
+    p_adjusted: float = np.nan
+    p_adjust_method: Optional[str] = None
 
 
 def _detect_task(y: pd.Series, max_unique_for_class: int = 20) -> str:
@@ -59,7 +65,46 @@ def _detect_task(y: pd.Series, max_unique_for_class: int = 20) -> str:
     return "regression"
 
 
-def _cv_iterator(task: str, y: np.ndarray, cv: int, random_state: int):
+def _normalize_task_mode(task_mode: Optional[str]) -> str:
+    if task_mode is None:
+        return "auto"
+    mode = str(task_mode).strip().lower()
+    aliases = {
+        "class": "classification",
+        "classifier": "classification",
+        "regress": "regression",
+        "regressor": "regression",
+    }
+    mode = aliases.get(mode, mode)
+    if mode in {"auto", "classification", "regression"}:
+        return mode
+    raise ValueError("task_mode must be one of: auto, classification, regression")
+
+
+def _resolve_target_task(
+    target: str,
+    y: pd.Series,
+    max_unique_for_class: int,
+    task_mode: str,
+    target_task_overrides: Optional[Dict[str, str]] = None,
+) -> str:
+    mode = task_mode
+    if target_task_overrides:
+        override_mode = target_task_overrides.get(str(target))
+        if override_mode is not None:
+            mode = override_mode
+    if mode == "auto":
+        return _detect_task(y, max_unique_for_class=max_unique_for_class)
+    return mode
+
+
+def _cv_iterator(
+    task: str,
+    y: np.ndarray,
+    cv: int,
+    random_state: int,
+    groups: Optional[np.ndarray] = None,
+):
     n = len(y)
     if n < 2:
         raise ValueError("Not enough samples for cross validation")
@@ -68,16 +113,77 @@ def _cv_iterator(task: str, y: np.ndarray, cv: int, random_state: int):
         classes, counts = np.unique(y, return_counts=True)
         if len(classes) < 2:
             raise ValueError("Classification requires at least two classes after alignment with X")
+
+    if groups is not None:
+        groups_arr = np.asarray(groups)
+        n_groups = len(np.unique(groups_arr))
+        if n_groups < 2:
+            raise ValueError("Group CV requires at least two unique groups")
+
+        if task == "classification":
+            groups_per_class = []
+            for cls in classes:
+                cls_groups = np.unique(groups_arr[y == cls])
+                groups_per_class.append(len(cls_groups))
+            min_groups = int(min(groups_per_class)) if groups_per_class else 1
+            if min_groups < 2:
+                raise ValueError("Not enough groups per class for group-based CV")
+
+            if StratifiedGroupKFold is not None:
+                n_splits = max(2, min(cv, min_groups))
+                if n_splits < cv:
+                    warnings.warn(
+                        f"Reducing CV folds from {cv} to {n_splits} due to limited groups per class",
+                        RuntimeWarning,
+                    )
+                return StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+
+            warnings.warn(
+                "StratifiedGroupKFold is unavailable; using GroupKFold without stratification.",
+                RuntimeWarning,
+            )
+            n_splits = max(2, min(cv, n_groups))
+            if n_splits < cv:
+                warnings.warn(
+                    f"Reducing CV folds from {cv} to {n_splits} due to limited group count",
+                    RuntimeWarning,
+                )
+            return GroupKFold(n_splits=n_splits)
+
+        n_splits = max(2, min(cv, n_groups))
+        if n_splits < cv:
+            warnings.warn(
+                f"Reducing CV folds from {cv} to {n_splits} due to limited group count",
+                RuntimeWarning,
+            )
+        return GroupKFold(n_splits=n_splits)
+
+    if task == "classification":
         min_per_class = int(counts.min())
+        if min_per_class < 2:
+            raise ValueError(
+                "Classification CV requires at least 2 samples in each class. "
+                "Use regression or merge sparse classes."
+            )
         n_splits = max(2, min(cv, min_per_class))
         if n_splits < cv:
             warnings.warn(f"Reducing CV folds from {cv} to {n_splits} due to small class counts", RuntimeWarning)
-        return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)        
-    else:
-        n_splits = max(2, min(cv, n))
-        if n_splits < cv:
-            warnings.warn(f"Reducing CV folds from {cv} to {n_splits} due to small sample size", RuntimeWarning)
-        return KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+        return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+
+    # R2 is the primary regression metric and requires at least 2 samples per test fold.
+    max_splits_for_r2 = n // 2
+    if max_splits_for_r2 < 2:
+        raise ValueError(
+            "Regression with R2 requires at least 4 samples after alignment "
+            "to ensure each test fold has at least 2 samples."
+        )
+    n_splits = max(2, min(cv, max_splits_for_r2))
+    if n_splits < cv:
+        warnings.warn(
+            f"Reducing CV folds from {cv} to {n_splits} so regression test folds have at least 2 samples",
+            RuntimeWarning,
+        )
+    return KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
 
 
 def _primary_metric(task: str):
@@ -109,14 +215,43 @@ def _metric_functions(task: str):
     }
 
 
-def _inner_cv(task: str, y: np.ndarray, random_state: int):
+def _inner_cv(
+    task: str,
+    y: np.ndarray,
+    random_state: int,
+    groups: Optional[np.ndarray] = None,
+):
     n = len(y)
+    if groups is not None:
+        groups_arr = np.asarray(groups)
+        n_groups = len(np.unique(groups_arr))
+        if n_groups < 2:
+            return None
+        if task == "classification":
+            classes = np.unique(y)
+            groups_per_class = [len(np.unique(groups_arr[y == cls])) for cls in classes]
+            min_groups = int(min(groups_per_class)) if groups_per_class else 1
+            if min_groups < 2:
+                return None
+            if StratifiedGroupKFold is not None:
+                n_splits = max(2, min(3, min_groups))
+                return StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+            n_splits = max(2, min(3, n_groups))
+            return GroupKFold(n_splits=n_splits)
+        n_splits = max(2, min(3, n_groups))
+        return GroupKFold(n_splits=n_splits)
+
     if task == "classification":
         classes, counts = np.unique(y, return_counts=True)
         min_per_class = int(counts.min()) if len(counts) else 1
+        if min_per_class < 2:
+            return None
         n_splits = max(2, min(3, min_per_class))
         return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-    n_splits = max(2, min(3, n))
+    max_splits_for_r2 = n // 2
+    if max_splits_for_r2 < 2:
+        return None
+    n_splits = max(2, min(3, max_splits_for_r2))
     return KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
 
 
@@ -189,16 +324,31 @@ def _fit_and_score_cv(
     task: str,
     base_model,
     cv_splits,
-    scorer
+    scorer,
+    groups: Optional[np.ndarray] = None,
 ) -> Tuple[List[float], np.ndarray]:
     scores: List[float] = []
     preds = np.empty_like(y, dtype=float)
-    for train, test in cv_splits.split(X, y if task == "classification" else None):
+    split_kwargs = {"X": X}
+    if task == "classification":
+        split_kwargs["y"] = y
+    if groups is not None:
+        split_kwargs["groups"] = groups
+    for train, test in cv_splits.split(**split_kwargs):
         model = clone(base_model)
-        model.fit(X[train], y[train])
+        if groups is not None and isinstance(model, GridSearchCV):
+            model.fit(X[train], y[train], groups=groups[train])
+        else:
+            model.fit(X[train], y[train])
         y_pred = model.predict(X[test])
         preds[test] = y_pred
-        scores.append(scorer(y[test], y_pred))
+        fold_score = scorer(y[test], y_pred)
+        if not np.isfinite(fold_score):
+            raise ValueError(
+                "Non-finite CV score encountered (often R2 on a fold with fewer than 2 test samples). "
+                "Reduce CV folds or use more data."
+            )
+        scores.append(float(fold_score))
     return scores, preds
 
 
@@ -212,18 +362,28 @@ def _perm_test(
     observed: float,
     n_perm: int,
     larger_is_better: bool,
-    rng: np.random.RandomState
+    rng: np.random.RandomState,
+    groups: Optional[np.ndarray] = None,
 ) -> Tuple[List[float], float]:
     perm_scores = []
     for _ in range(n_perm):
         y_perm = rng.permutation(y)
-        scores, _ = _fit_and_score_cv(X, y_perm, task, estimator, cv_splits, scorer)
+        scores, _ = _fit_and_score_cv(X, y_perm, task, estimator, cv_splits, scorer, groups=groups)
         perm_scores.append(np.mean(scores))
     if larger_is_better:
         p = (1.0 + np.sum(np.asarray(perm_scores) >= observed)) / (n_perm + 1.0)
     else:
         p = (1.0 + np.sum(np.asarray(perm_scores) <= observed)) / (n_perm + 1.0)
     return perm_scores, float(p)
+
+
+def _normalize_correction_method(method: Optional[str]) -> Optional[str]:
+    if method is None:
+        return None
+    m = str(method).strip().lower()
+    if m in {"none", "no", "off", "false", "0", "na", "n/a"}:
+        return None
+    return m
 
 
 def auto_cv_with_permutation(
@@ -250,6 +410,10 @@ def auto_cv_with_permutation(
     k_best_grid: Optional[List[int]] = None,
     percentile_grid: Optional[List[int]] = None,
     variance_threshold_grid: Optional[List[float]] = None,
+    correction_method: Optional[str] = "fdr_bh",
+    groups: Optional[pd.Series] = None,
+    task_mode: str = "auto",
+    target_task_overrides: Optional[Dict[str, str]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, np.ndarray]]:
     """
     Cross-validated evaluation with a permutation test for one or more targets.
@@ -302,6 +466,17 @@ def auto_cv_with_permutation(
         Optional list of percentile values to tune when using Percentile feature selection.
     variance_threshold_grid : Optional[List[float]]
         Optional list of variance thresholds to tune when using VarianceThreshold selection.
+    correction_method : Optional[str]
+        Multiple-comparisons correction method passed to statsmodels.multipletests (e.g., "fdr_bh", "bonferroni", "holm").
+        Use None or "none" to disable adjustment.
+    groups : Optional[Series or array-like]
+        Optional group labels aligned to X/Y. Enables GroupKFold; uses StratifiedGroupKFold for classification if available.
+    task_mode : str
+        Global task rule for targets: "auto", "classification", or "regression".
+        Per-target overrides (if any) take precedence.
+    target_task_overrides : Optional[Dict[str, str]]
+        Optional mapping from target column name to "auto", "classification", or "regression".
+        Use this to explicitly force task type for individual targets.
 
     Returns
     -------
@@ -325,15 +500,41 @@ def auto_cv_with_permutation(
     # Keep raw features; scaling (if enabled) happens inside the CV pipeline to avoid leakage.
     X_mat = X.values.astype(float)
 
+    group_series = None
+    if groups is not None:
+        if isinstance(groups, pd.Series):
+            group_series = groups.reindex(X.index)
+        else:
+            if len(groups) != len(X):
+                raise ValueError("groups must be the same length as X")
+            group_series = pd.Series(groups, index=X.index)
+
     results: List[TargetResult] = []
     extra_metric_rows: List[Dict[str, float]] = []
     supported_metrics = set(_metric_functions("classification")) | set(_metric_functions("regression"))
     unknown_metrics = sorted(set(extra_metric_names) - supported_metrics)
     cv_preds: Dict[str, np.ndarray] = {}
+    normalized_task_mode = _normalize_task_mode(task_mode)
+    normalized_overrides: Dict[str, str] = {}
+    if target_task_overrides:
+        for target_name, mode in target_task_overrides.items():
+            normalized_overrides[str(target_name)] = _normalize_task_mode(mode)
 
     for target in Y.columns:
         y_raw = Y[target].dropna()
         common_idx = X.index.intersection(y_raw.index)
+        group_vals = None
+        if group_series is not None:
+            group_aligned = group_series.loc[common_idx].dropna()
+            if group_aligned.empty:
+                warnings.warn(
+                    f"Skipping {target}: group column has no usable values after alignment",
+                    RuntimeWarning,
+                )
+                continue
+            common_idx = common_idx.intersection(group_aligned.index)
+            group_vals = group_aligned.loc[common_idx].to_numpy()
+
         y_raw = y_raw.loc[common_idx]
 
         if len(y_raw) < 2:
@@ -342,7 +543,13 @@ def auto_cv_with_permutation(
 
         X_sub = X_mat[[X.index.get_loc(i) for i in common_idx]]
 
-        task = _detect_task(y_raw, max_unique_for_class)
+        task = _resolve_target_task(
+            target=str(target),
+            y=y_raw,
+            max_unique_for_class=max_unique_for_class,
+            task_mode=normalized_task_mode,
+            target_task_overrides=normalized_overrides,
+        )
         metric_name, scorer, larger_is_better = _primary_metric(task)
 
         if task == "classification":
@@ -359,9 +566,22 @@ def auto_cv_with_permutation(
             base_model = regressor_model
             param_grid = regressor_param_grid or {}
 
-        cv_splits = _cv_iterator(task, y, cv, random_state)
         try:
-            actual_folds = int(cv_splits.get_n_splits(X_sub, y if task == "classification" else None))
+            cv_splits = _cv_iterator(task, y, cv, random_state, groups=group_vals)
+        except ValueError as exc:
+            warnings.warn(f"Skipping {target}: {exc}", RuntimeWarning)
+            continue
+        try:
+            if group_vals is not None:
+                actual_folds = int(
+                    cv_splits.get_n_splits(
+                        X_sub,
+                        y if task == "classification" else None,
+                        groups=group_vals,
+                    )
+                )
+            else:
+                actual_folds = int(cv_splits.get_n_splits(X_sub, y if task == "classification" else None))
         except Exception:
             actual_folds = cv
 
@@ -423,19 +643,38 @@ def auto_cv_with_permutation(
                 warnings.warn("Variance threshold grid empty after filtering invalid values.", RuntimeWarning)
 
         if tune_hyperparams and pipeline_grid:
-            inner_cv = _inner_cv(task, y, random_state)
-            base_estimator = GridSearchCV(
-                pipeline,
-                pipeline_grid,
-                cv=inner_cv,
-                n_jobs=None
-            )
+            inner_cv = _inner_cv(task, y, random_state, groups=group_vals)
+            if inner_cv is None:
+                warnings.warn(
+                    f"Skipping hyperparameter tuning for {target}: not enough groups for inner CV.",
+                    RuntimeWarning,
+                )
+                base_estimator = pipeline
+            else:
+                base_estimator = GridSearchCV(
+                    pipeline,
+                    pipeline_grid,
+                    cv=inner_cv,
+                    n_jobs=None
+                )
         else:
             if tune_hyperparams and not pipeline_grid:
                 warnings.warn(f"No hyperparameter grid for {target}; skipping tuning.", RuntimeWarning)
             base_estimator = pipeline
 
-        cv_scores, preds = _fit_and_score_cv(X_sub, y, task, base_estimator, cv_splits, scorer)
+        try:
+            cv_scores, preds = _fit_and_score_cv(
+                X_sub,
+                y,
+                task,
+                base_estimator,
+                cv_splits,
+                scorer,
+                groups=group_vals,
+            )
+        except ValueError as exc:
+            warnings.warn(f"Skipping {target}: {exc}", RuntimeWarning)
+            continue
         observed = float(np.mean(cv_scores))
         extra_metrics: Dict[str, float] = {}
         if extra_metric_names:
@@ -444,10 +683,23 @@ def auto_cv_with_permutation(
                 if name in metric_funcs:
                     extra_metrics[f"metric_{name}"] = float(metric_funcs[name](y, preds))
 
-        perm_scores, p_val = _perm_test(
-            X_sub, y, task, base_estimator, cv_splits, scorer,
-            observed, int(n_permutations), larger_is_better, rng
-        )
+        try:
+            perm_scores, p_val = _perm_test(
+                X_sub,
+                y,
+                task,
+                base_estimator,
+                cv_splits,
+                scorer,
+                observed,
+                int(n_permutations),
+                larger_is_better,
+                rng,
+                groups=group_vals,
+            )
+        except ValueError as exc:
+            warnings.warn(f"Skipping {target}: {exc}", RuntimeWarning)
+            continue
 
         results.append(TargetResult(
             target=str(target),
@@ -458,22 +710,42 @@ def auto_cv_with_permutation(
             p_fdr=np.nan,
             cv_scores=[float(s) for s in cv_scores],
             perm_scores=[float(s) for s in perm_scores],
-            cv_folds_used=int(actual_folds)
+            cv_folds_used=int(actual_folds),
+            p_adjusted=np.nan,
+            p_adjust_method=None,
         ))
         extra_metric_rows.append(extra_metrics)
         cv_preds[target] = preds
 
     if not results:
         return pd.DataFrame(columns=[
-            "target","task","metric_name","observed","p_value","p_fdr",
+            "target","task","metric_name","observed","p_value","p_fdr","p_adjusted","p_adjust_method",
             "cv_scores","perm_scores","cv_folds_used"
         ]), {}
 
-    # FDR correction across targets
-    p_vals = [r.p_value for r in results]
-    _, p_fdr, _, _ = multipletests(p_vals, method="fdr_bh")
-    for r, adj in zip(results, p_fdr):
-        r.p_fdr = float(adj)
+    # Multiple-comparisons correction across targets
+    adjust_method = _normalize_correction_method(correction_method)
+    p_adj = None
+    if adjust_method:
+        try:
+            _, p_adj, _, _ = multipletests([r.p_value for r in results], method=adjust_method)
+        except Exception:
+            warnings.warn(
+                f"Unknown correction method '{correction_method}'. Skipping adjustment.",
+                RuntimeWarning,
+            )
+            adjust_method = None
+
+    if adjust_method and p_adj is not None:
+        for r, adj in zip(results, p_adj):
+            r.p_adjusted = float(adj)
+            r.p_adjust_method = adjust_method
+            if adjust_method == "fdr_bh":
+                r.p_fdr = float(adj)
+    else:
+        for r in results:
+            r.p_adjusted = np.nan
+            r.p_adjust_method = None
 
     if unknown_metrics:
         warnings.warn(
@@ -487,4 +759,7 @@ def auto_cv_with_permutation(
         row.update(extra)
         rows.append(row)
     results_df = pd.DataFrame(rows)
+    for col in ("p_adjusted", "p_adjust_method", "p_fdr"):
+        if col in results_df.columns and results_df[col].isna().all():
+            results_df = results_df.drop(columns=[col])
     return results_df, cv_preds

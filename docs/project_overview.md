@@ -4,15 +4,16 @@
 
 ## Table of Contents
 1. [Overview](#overview)
-2. [Feature Highlights](#feature-highlights)
-3. [Architecture](#architecture)
-4. [Installation](#installation)
-5. [Quickstart (Library)](#quickstart-library)
-6. [Streamlit App](#streamlit-app)
-7. [Module Reference](#module-reference)
-8. [Data Flow: Text → Report](#data-flow-text--report)
-9. [Testing & Quality](#testing--quality)
-10. [Support & Contributing](#support--contributing)
+2. [Orientation: Using Text Embeddings for Statistical Analysis](#orientation-using-text-embeddings-for-statistical-analysis)
+3. [Feature Highlights](#feature-highlights)
+4. [Architecture](#architecture)
+5. [Installation](#installation)
+6. [Quickstart (Library)](#quickstart-library)
+7. [Streamlit App](#streamlit-app)
+8. [Module Reference](#module-reference)
+9. [Data Flow: Text → Report](#data-flow-text-report)
+10. [Testing & Quality](#testing--quality)
+11. [Support & Contributing](#support--contributing)
 
 ## Overview
 
@@ -21,6 +22,124 @@ NLPsych bundles spaCy-driven descriptive statistics, SentenceTransformer embeddi
 - **Source**: `src/nlpsych` (library) and `src/nlpsych_app` (Streamlit front-end)
 - **Entry points**: Import `nlpsych` in Python or launch the UI with `nlpsych-app`
 - **Use cases**: Rapid exploratory text analytics, psychometric prototyping, teaching demos, or lightweight NLP quality assurance
+
+## Orientation: Using Text Embeddings for Statistical Analysis
+
+This walkthrough is for non-coders and non-ML users. NLPsych allows you to convert text into numerical representations and use those representations in statistical or machine learning models. Before doing so, it is important to understand what these methods are doing and how to use them in a scientifically responsible way.
+
+### 1. What a text embedding is
+
+A text embedding is a numerical vector that represents the meaning of a piece of text.
+
+The embedding is learned from large text corpora and captures statistical patterns in how words and phrases are used. Texts with similar meanings tend to be mapped to nearby points in a high dimensional space.
+
+Important implications:
+
+* Embeddings reflect usage patterns in language
+* They approximate semantic similarity
+* They are learned rather than rule based
+* They do not encode logical truth or causal structure
+
+Similarity between embedded texts means that they tend to appear in similar contexts. It does not imply that they are scientifically related in a causal or mechanistic sense.
+
+### 2. What Embeddings Preserve and What They Lose
+
+Embeddings compress textual information into a fixed length vector.
+
+They tend to preserve:
+
+* General semantic meaning
+* Topical similarity
+* Broad contextual relationships
+
+They may lose:
+
+* Syntax
+* Negation
+* Rare terminology
+* Subtle distinctions in phrasing
+
+Small wording changes can sometimes produce large changes in representation. Domain specific terminology may also be poorly represented if it is uncommon in general language corpora.
+
+### 3. Embeddings as Predictors
+
+Once generated, embeddings can be treated as predictors in a statistical model.
+
+Examples include:
+
+* Document classification
+* Predicting outcomes from written reports
+* Clustering texts into groups
+* Testing whether language use differs across conditions
+
+Embedding vectors typically contain hundreds or thousands of numerical features. This often creates a setting where the number of predictors is large relative to the number of observations.
+
+In such cases:
+
+* Overfitting becomes a serious risk
+* Regularization may be required
+* Dimensionality reduction may be helpful
+* Validation becomes essential
+
+### 4. Cross Validation
+
+Cross validation estimates how well a model is expected to perform on new data.
+
+A typical procedure:
+
+1. Split the data into several folds
+2. Train the model on some folds
+3. Evaluate it on the remaining fold
+4. Repeat across folds
+
+This produces a distribution of performance values rather than a single estimate.
+
+Performance reported from a single train test split can be unstable when the number of predictors is large. Cross validation provides a more reliable estimate of expected generalization performance.
+
+### 5. Hyperparameter Tuning
+
+Most machine learning models contain settings that influence their behavior. Examples include:
+
+* Regularization strength
+* Number of retained components after dimensionality reduction
+* Model complexity
+* Number of clusters
+
+Choosing these settings based on the same data used to estimate performance can produce optimistic results.
+
+A safer approach uses nested cross validation:
+
+Outer loop
+Estimates performance
+
+Inner loop
+Selects model settings
+
+Final reported performance comes from the outer loop only.
+
+### 6. Permutation Testing
+
+Permutation testing provides a simple nonparametric way to test whether text contains predictive information about an outcome.
+
+Rather than relying on distributional assumptions, permutation tests evaluate whether the observed relationship between predictors and outcome is stronger than would be expected by chance.
+
+A typical procedure:
+
+Fit a model using the true outcome values
+
+Measure predictive performance using cross validation
+
+Randomly shuffle the outcome values
+
+Refit the same model using the shuffled outcomes
+
+Recompute predictive performance
+
+Repeat many times
+
+This produces a null distribution representing performance expected if there were no real relationship between predictors and outcome.
+
+The observed performance can then be compared to this distribution to obtain a p value for predictive signal.
 
 ## Feature Highlights
 
@@ -82,7 +201,7 @@ pip install -e ".[app,dev]"
 
 ```python
 import pandas as pd
-from nlpsych.descriptive_stats import spacy_descriptive_stats
+from nlpsych.descriptive_stats import descriptive_stats
 from nlpsych.embedding import embed_text_columns_simple, reduce_embeddings, build_plot_df
 from nlpsych.modeling import auto_cv_with_permutation
 from nlpsych.report import build_report_payload
@@ -93,7 +212,7 @@ df = pd.DataFrame({"note": [
 ]})
 
 # 1. Descriptive statistics
-stats_df, overall = spacy_descriptive_stats(df["note"], split_overall="both")
+stats_df, overall = descriptive_stats(df["note"], split_overall="both")
 
 # 2. Embeddings + projection
 meta_df, emb, texts = embed_text_columns_simple([df["note"]])
@@ -136,7 +255,7 @@ State is cached via `st.session_state` and Streamlit caching decorators to decou
 
 | Function | Purpose |
 | --- | --- |
-| `spacy_descriptive_stats(*series)` | Iterates over pandas Series, processes text with a cached spaCy pipeline, and returns per-row stats plus aggregated overall metrics. Options cover lemma vs. surface form vocabularies, alphabetic filtering, stopword removal, and sentence averaging mode (`unweighted` vs `ratio`). |
+| `descriptive_stats(*series)` | Iterates over pandas Series, processes text with a cached spaCy pipeline, and returns per-row stats plus aggregated overall metrics. Options cover lemma vs. surface form vocabularies, alphabetic filtering, stopword removal, and sentence averaging mode (`unweighted` vs `ratio`). |
 
 Outputs:
 - `stats_df`: MultiIndex (`source_column`, `index`) with char/word counts, POS tallies, and lexical diversity.
@@ -184,7 +303,7 @@ Key helpers: `_fit_and_score_cv`, `_perm_test`, and the `TargetResult` dataclass
 ## Data Flow: Text → Report
 
 1. **Ingest**: CSV columns are selected as `series_list`.
-2. **Descriptive stats**: `spacy_descriptive_stats` yields per-row + overall aggregates; cached in `st.session_state`.
+2. **Descriptive stats**: `descriptive_stats` yields per-row + overall aggregates; cached in `st.session_state`.
 3. **Embeddings**: SentenceTransformer encodes rows → `reduce_embeddings` condenses dimensions → Plotly visualizes `build_plot_df`.
 4. **Modeling**: Embeddings are averaged per original row, joined with numeric targets, and passed to `auto_cv_with_permutation`.
 5. **Report assembly**: `build_report_payload` stitches together whichever components the user ran (stats, embeddings note, modeling table) and emits HTML/Markdown for download or sharing.
