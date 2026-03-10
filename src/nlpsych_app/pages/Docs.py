@@ -99,11 +99,11 @@ def main() -> None:
             ("Quickstart (Library)", "quickstart-library"),
             ("Streamlit App", "streamlit-app"),
             ("Module Reference", "module-reference"),
-            ("Data Flow: Text → Report", "data-flow-text--report"),
+            ("Data Flow: Text → Report", "data-flow-text-report"),
             ("Testing & Quality", "testing--quality"),
             ("Support & Contributing", "support--contributing"),
         ]
-        links_md = "\n".join(f"- [{label}](Docs#{anchor})" for label, anchor in doc_sections)
+        links_md = "\n".join(f"- [{label}](#{anchor})" for label, anchor in doc_sections)
         st.markdown(links_md)
 
     md = _load_docs_markdown()

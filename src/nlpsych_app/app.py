@@ -238,21 +238,11 @@ def main():
 
         st.markdown("---")
         st.markdown("📘 Docs")
-        doc_sections = [
-            ("Overview", "overview"),
-            ("Beginner Tutorial (Non-ML)", "beginner-tutorial-non-ml"),
-            ("Feature Highlights", "feature-highlights"),
-            ("Architecture", "architecture"),
-            ("Installation", "installation"),
-            ("Quickstart (Library)", "quickstart-library"),
-            ("Streamlit App", "streamlit-app"),
-            ("Module Reference", "module-reference"),
-            ("Data Flow: Text → Report", "data-flow-text-report"),
-            ("Testing & Quality", "testing--quality"),
-            ("Support & Contributing", "support--contributing"),
-        ]
-        links_md = "\n".join(f"- [{label}](Docs#{anchor})" for label, anchor in doc_sections)
-        st.markdown(links_md)
+        try:
+            st.page_link("pages/Docs.py", label="Open Documentation", icon="📖")
+        except Exception:
+            st.markdown("[Open Documentation](Docs)")
+        st.caption("Section jump links are available in the Docs page sidebar.")
     center_left, center_col, center_right = st.columns([1, 2, 1])
     with center_col:
         st.markdown(
@@ -289,7 +279,11 @@ def main():
                 - Recompute stats or embeddings after changing preprocessing options to refresh cached results.
                 """
             )
-            st.info('This public demo runs on third-party servers. See [docs](Docs#streamlit-app) to run this app locally.', icon="ℹ️")
+            st.info("This public demo runs on third-party servers. See docs for local setup instructions.", icon="ℹ️")
+            try:
+                st.page_link("pages/Docs.py", label="Open Docs (Streamlit setup)", icon="📘")
+            except Exception:
+                st.markdown("[Open Docs](Docs)")
 
         # Uploader at the top, centered block
         uploaded = st.file_uploader("Upload CSV/TSV/XLSX", type=["csv", "tsv", "xlsx"])
