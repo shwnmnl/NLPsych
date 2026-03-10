@@ -238,11 +238,42 @@ def main():
 
         st.markdown("---")
         st.markdown("📘 Docs")
-        try:
-            st.page_link("pages/Docs.py", label="Open Documentation", icon="📖")
-        except Exception:
+        docs_link_rendered = False
+        for candidate in ("pages/Docs.py", "src/nlpsych_app/pages/Docs.py"):
+            try:
+                st.page_link(candidate, label="Open Documentation", icon="📖")
+                docs_link_rendered = True
+                break
+            except Exception:
+                continue
+        if not docs_link_rendered:
             st.markdown("[Open Documentation](Docs)")
-        st.caption("Section jump links are available in the Docs page sidebar.")
+
+        doc_sections = [
+            ("Overview", "overview"),
+            (
+                "Orientation: Using Text Embeddings for Statistical Analysis",
+                "orientation-using-text-embeddings-for-statistical-analysis",
+            ),
+            ("Feature Highlights", "feature-highlights"),
+            ("Architecture", "architecture"),
+            ("Installation", "installation"),
+            ("Quickstart (Library)", "quickstart-library"),
+            ("Streamlit App", "streamlit-app"),
+            ("Module Reference", "module-reference"),
+            ("Data Flow: Text → Report", "data-flow-text-report"),
+            ("Testing & Quality", "testing--quality"),
+            ("Support & Contributing", "support--contributing"),
+        ]
+        docs_links_html = (
+            "<ul style='margin:0.25rem 0 0 1rem; padding:0;'>"
+            + "".join(
+                f"<li><a href='Docs#{anchor}' target='_self'>{html.escape(label)}</a></li>"
+                for label, anchor in doc_sections
+            )
+            + "</ul>"
+        )
+        st.markdown(docs_links_html, unsafe_allow_html=True)
     center_left, center_col, center_right = st.columns([1, 2, 1])
     with center_col:
         st.markdown(
@@ -280,9 +311,15 @@ def main():
                 """
             )
             st.info("This public demo runs on third-party servers. See docs for local setup instructions.", icon="ℹ️")
-            try:
-                st.page_link("pages/Docs.py", label="Open Docs (Streamlit setup)", icon="📘")
-            except Exception:
+            setup_link_rendered = False
+            for candidate in ("pages/Docs.py", "src/nlpsych_app/pages/Docs.py"):
+                try:
+                    st.page_link(candidate, label="Open Docs (Streamlit setup)", icon="📘")
+                    setup_link_rendered = True
+                    break
+                except Exception:
+                    continue
+            if not setup_link_rendered:
                 st.markdown("[Open Docs](Docs)")
 
         # Uploader at the top, centered block
