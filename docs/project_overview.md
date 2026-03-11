@@ -20,7 +20,7 @@
 NLPsych bundles spaCy-driven descriptive statistics, SentenceTransformer embeddings, classical scikit-learn models, and a report generator behind a single API. A packaged Streamlit UI (`nlpsych_app`) exposes the same primitives to non-technical users.
 
 - **Source**: `src/nlpsych` (library) and `src/nlpsych_app` (Streamlit front-end)
-- **Entry points**: Import `nlpsych` in Python or launch the UI with `nlpsych-app`
+- **Entry points**: Import `nlpsych` in Python, launch installed UI with `nlpsych-app`, or run source UI with `streamlit run streamlit_app.py`
 - **Use cases**: Rapid exploratory text analytics, psychometric prototyping, teaching demos, or lightweight NLP quality assurance
 
 ## Orientation: Using Text Embeddings for Statistical Analysis
@@ -145,13 +145,14 @@ The observed performance can then be compared to this distribution to obtain a p
 
 - **Descriptive statistics**: Token/character counts, lexical diversity, POS breakdowns, and customizable averaging modes powered by spaCy.
 - **Embeddings**: Plug-and-play SentenceTransformer encoders (MiniLM, MPNet, multilingual variants, or custom names) plus PCA/UMAP/t-SNE reduction and Plotly visualizations.
-- **Modeling**: Auto-detected classification/regression with cross-validation, permutation tests, and Benjamini–Hochberg FDR correction via `auto_cv_with_permutation`.
-- **Reports**: `build_report_payload` assembles HTML + Markdown summaries with interpretations for stats and modeling outcomes.
+- **Modeling**: Auto-detection plus explicit task overrides (`task_mode`, `target_task_overrides`), CV/permutation testing, and Benjamini–Hochberg FDR correction via `auto_cv_with_permutation`.
+- **Reports**: `build_report_payload` assembles HTML + Markdown summaries with per-target interpretations and example write-up sentences.
 - **App workflow**: Upload CSV/TSV/XLSX (or use demo data), pick text columns, compute stats, explore embeddings, run models, and export reports without touching code.
 
 ## Architecture
 
 ```
+streamlit_app.py      # Source/dev multipage router (Main + Docs)
 src/
 ├── nlpsych/          # Core analytics library (importable)
 │   ├── descriptive_stats.py
@@ -161,7 +162,9 @@ src/
 │   └── utils.py
 ├── nlpsych_app/      # Streamlit UI built on top of the library
 │   ├── app.py
-│   └── launch.py     # Exposed as the `nlpsych-app` console script
+│   ├── launch.py     # Exposed as the `nlpsych-app` console script
+│   └── pages/
+│       └── Docs.py
 └── tests/            # Pytest suite for critical utilities
 ```
 
@@ -172,30 +175,32 @@ src/
 ### Library only
 
 ```bash
-pip install NLPsych
+pip install nlpsych
 ```
 
 This installs the `nlpsych` package with dependencies such as pandas, spaCy 3.8, scikit-learn, statsmodels, SentenceTransformers, UMAP, Plotly, and Tabulate.
+Use lowercase in commands and imports (`nlpsych`, `nlpsych_app`).
 
 ### Streamlit app
 
 ```bash
-pip install "NLPsych[app]"
+pip install "nlpsych[app]"
 nlpsych-app
 ```
 
-The `[app]` extra adds Streamlit and wires up the `nlpsych-app` console entry point (`src/nlpsych_app/launch.py`). The launcher ensures Streamlit exists, points to the packaged `.streamlit` config directory, and runs `streamlit run` on `app.py`.
+The `[app]` extra adds Streamlit and wires up the `nlpsych-app` console entry point (`src/nlpsych_app/launch.py`). The launcher ensures Streamlit exists, points to the packaged `.streamlit` config directory, and runs `streamlit run` on the packaged `nlpsych_app/app.py`.
 
 ### Local development
 
 ```bash
-git clone https://github.com/shwnmnl/NLPsych.git
-cd NLPsych
+git clone https://github.com/shwnmnl/nlpsych.git
+cd nlpsych
 pip install -e ".[app,dev]"
 ```
 
 - `.[app,dev]` gives you the UI plus formatting/testing tools (`ruff`, `black`, `pytest`).
-- Run the app from source with `streamlit run src/nlpsych_app/app.py`.
+- Run the app from source with `streamlit run streamlit_app.py`.
+- For Streamlit Community Cloud, set the main file path to `streamlit_app.py`.
 
 ## Quickstart (Library)
 
@@ -236,14 +241,14 @@ html_report, md_report = build_report_payload(
 
 ## Streamlit App
 
-`src/nlpsych_app/app.py` layers an opinionated UX on top of the primitives:
+`streamlit_app.py` defines source/dev multipage routing, and `src/nlpsych_app/app.py` layers an opinionated UX on top of the primitives:
 
 1. **Upload data**: CSV/TSV/XLSX or toggle demo data seeded with two text columns and a binary target.
 2. **Tabs workflow**:
    - Overview: dataset summary and selected text columns.
    - Descriptive stats: toggles for alphabetic filtering, stopword removal, lemma-based vocab, and averaging mode; caches spaCy pipeline.
    - Embeddings: SentenceTransformer selector (preset list + custom option), choice of PCA/UMAP/t-SNE, and 2D/3D plotting with Plotly.
-   - Modeling: pick non-text targets, set CV folds and permutation count, reuse cached embeddings, and view permutation histograms.
+   - Modeling: pick non-text targets, set CV/permutation controls, choose task mode (auto/classification/regression), optionally override task per target, reuse cached embeddings, and view permutation histograms.
    - Report: combine previous outputs into HTML or Markdown, ready for download.
 3. **Downloads**: CSVs for per-row stats, projection coordinates, embeddings (with metadata), modeling tables, plus `.npy` arrays and HTML/Markdown reports.
 
@@ -274,18 +279,18 @@ Outputs:
 
 `auto_cv_with_permutation` orchestrates the full modeling loop:
 
-1. Detects task type per target via `_detect_task` (categorical or low-cardinality numeric → classification).
-2. Builds CV iterators (StratifiedKFold vs. KFold) with automatic fold reductions for tiny datasets.
-3. Fits either LogisticRegression (classification) or Ridge (regression) pipelines, with optional `scale_X`.
-4. Computes CV metrics (`accuracy` or `r2`), stores per-fold predictions, and runs permutation tests.
-5. Applies Benjamini–Hochberg FDR correction and packages results as a tidy DataFrame + prediction dict.
+1. Resolves task per target using `task_mode` plus optional `target_task_overrides`; in `auto`, `_detect_task` treats categorical/low-cardinality numeric targets as classification.
+2. Builds CV iterators (StratifiedKFold vs. KFold, group-aware variants when groups are provided) with safeguards for tiny datasets and sparse classes.
+3. Fits classification/regression pipelines (default LogisticRegression/Ridge, with optional scaling, feature selection, PCA, and hyperparameter search).
+4. Computes chosen metrics, stores per-fold predictions, and runs permutation tests.
+5. Applies multiple-testing correction (default `fdr_bh`) and packages results as a tidy DataFrame + prediction dict.
 
 Key helpers: `_fit_and_score_cv`, `_perm_test`, and the `TargetResult` dataclass.
 
 ### `nlpsych.report`
 
 - `build_report_payload(text_cols, stats_df, overall_obj, plot_df, results_df)` returns parallel HTML/Markdown reports.
-- Includes interpretation helpers (`interpret_stats`, `interpret_model_row`) that translate numeric metrics into narrative bullets.
+- Includes interpretation helpers (`interpret_stats`, `interpret_model_row`, `summarize_model_row`) that translate outputs into narrative bullets plus an example write-up sentence.
 - HTML output ships with lightweight inline CSS for cards/tables; Markdown output favors `pandas.DataFrame.to_markdown`.
 
 ### `nlpsych.utils`
@@ -298,7 +303,7 @@ Key helpers: `_fit_and_score_cv`, `_perm_test`, and the `TargetResult` dataclass
 ### `nlpsych_app`
 
 - `app.py`: Streamlit layout (tabbed workflow, caching, download helpers, demo data, Plotly charts).
-- `launch.py`: Console entry point that checks for Streamlit, points `STREAMLIT_CONFIG_DIR` at packaged defaults, and shells out to `streamlit run`.
+- `launch.py`: Console entry point that checks for Streamlit, points `STREAMLIT_CONFIG_DIR` at packaged defaults, and shells out to `streamlit run` on `src/nlpsych_app/app.py`.
 
 ## Data Flow: Text → Report
 
@@ -315,17 +320,18 @@ This modular flow allows you to reuse outputs elsewhere (e.g., feed embeddings i
 - **Unit tests** (`tests/`):
   - `test_import.py`: guards package importability and exposed `__version__`.
   - `test_spacy_utils.py`: verifies `get_spacy_pipeline_base` returns a spaCy `Language` with a sentencizer even when downloads are disabled.
+  - `test_modeling_task_control.py`: verifies forced task-mode behavior (`task_mode`, `target_task_overrides`) and small-class CV guardrails.
 - **Suggested commands**:
 
 ```bash
 pytest
 ```
 
-Add `-k module_name -vv` for focused runs. Future coverage could extend to embedding/modeling smoke tests using small fixtures.
+Add `-k module_name -vv` for focused runs. Future coverage could extend further into embedding/report rendering smoke tests with small fixtures.
 
 ## Support & Contributing
 
-- Issues & feature requests: [GitHub Issues](https://github.com/shwnmnl/NLPsych/issues)
+- Issues & feature requests: [GitHub Issues](https://github.com/shwnmnl/nlpsych/issues)
 - Pull requests: welcome! Please describe the feature/fix, add tests when practical, and keep documentation updated (including this page).
 - Questions or collaboration ideas: open an issue or reach out to the maintainer listed in `pyproject.toml`.
 

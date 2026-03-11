@@ -310,17 +310,10 @@ def main():
                 - Recompute stats or embeddings after changing preprocessing options to refresh cached results.
                 """
             )
-            st.info("This public demo runs on third-party servers. See docs for local setup instructions.", icon="ℹ️")
-            setup_link_rendered = False
-            for candidate in ("pages/Docs.py", "src/nlpsych_app/pages/Docs.py"):
-                try:
-                    st.page_link(candidate, label="Open Docs (Streamlit setup)", icon="📘")
-                    setup_link_rendered = True
-                    break
-                except Exception:
-                    continue
-            if not setup_link_rendered:
-                st.markdown("[Open Docs](Docs)")
+            st.info(
+                "This public demo runs on third-party servers. See [docs](Docs#streamlit-app) for local setup instructions.",
+                icon="ℹ️",
+            )
 
         # Uploader at the top, centered block
         uploaded = st.file_uploader("Upload CSV/TSV/XLSX", type=["csv", "tsv", "xlsx"])

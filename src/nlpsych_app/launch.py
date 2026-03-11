@@ -8,7 +8,7 @@ def main():
         print(
             "Streamlit is not installed.\n\n"
             "Install the app extra and try again:\n"
-            "  pip install 'NLPsych[app]'\n",
+            "  pip install 'nlpsych[app]'\n",
             file=sys.stderr,
         )
         sys.exit(1)

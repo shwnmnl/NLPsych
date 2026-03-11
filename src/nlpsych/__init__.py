@@ -1,12 +1,12 @@
 """
-NLPsych: Tools for text analysis, embeddings, and lightweight modeling,
+nlpsych: Tools for text analysis, embeddings, and lightweight modeling,
 with optional Streamlit app for interactive use.
 """
 
 from importlib.metadata import version
 
 # Expose top-level version
-__version__ = version("NLPsych")
+__version__ = version("nlpsych")
 
 from .utils import get_spacy_pipeline_base, get_st_model_base
 from .descriptive_stats import descriptive_stats

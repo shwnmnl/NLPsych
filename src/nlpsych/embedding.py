@@ -68,7 +68,7 @@ def reduce_embeddings(
     embeddings: np.ndarray,
     method: Literal["umap", "tsne", "pca"] = "pca",
     n_components: int = 2,
-    random_state: int = 42,
+    random_state: int = 1,
     metric: str = "cosine",
     umap_n_neighbors: Optional[int] = None,
     umap_min_dist: Optional[float] = None,

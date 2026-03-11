@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/shwnmnl/NLPsych/main/assets/NLPsych_logo.png" alt="NLPsych logo" width="150"/>
+  <img src="https://raw.githubusercontent.com/shwnmnl/nlpsych/main/assets/NLPsych_logo.png" alt="NLPsych logo" width="150"/>
 </p>
 
 <h1 align="center">NLPsych</h1>
@@ -9,8 +9,8 @@ NLPsych (*Natural Language Psychometrics*) lets you upload a CSV file, pick your
 ## ⚙️ Features
 - 📊 Descriptive statistics: word counts, sentence lengths, lexical diversity
 - 🔎 Embeddings: Sentence-Transformers + dimensionality reduction (PCA, UMAP, t-SNE)
-- 🤖 Modeling: Quick logistic regression / ridge regression with cross-validation + permutation tests
-- 📑 Reports: Auto-generated HTML/Markdown reports with interpretations
+- 🤖 Modeling: auto/forced classification-vs-regression, CV safeguards, and permutation tests
+- 📑 Reports: HTML/Markdown outputs with per-target interpretations and example write-up sentences
 
 💡 Tip: If you only need the functions, install via pip. If you want the interactive app, clone the repo and run it with Streamlit.
 
@@ -19,14 +19,28 @@ NLPsych (*Natural Language Psychometrics*) lets you upload a CSV file, pick your
 To use NLPsych functions in your own Python code:
 
 ```bash
-pip install NLPsych
+pip install nlpsych
 ```
 
-## 🚀 Running the app locally
+Use lowercase in commands and imports (`nlpsych`, `nlpsych_app`).
+
+## 🚀 Running the app
+
+Installed package:
+
 ```bash
-pip install "NLPsych[app]"
+pip install "nlpsych[app]"
 nlpsych-app
 ```
+
+From this repo (source/dev or Streamlit Cloud-style entrypoint):
+
+```bash
+pip install -e ".[app]"
+streamlit run streamlit_app.py
+```
+
+For Streamlit Community Cloud, set the main file path to `streamlit_app.py`.
 
 ## 🛠 Example Usage (library)
 ```python
@@ -55,6 +69,7 @@ root/
 │   └── config.toml
 ├── assets/    
 │   └── NLPsych_logo.png          
+├── streamlit_app.py
 ├── src/
 │   ├── nlpsych     
 │   │   ├── __init__.py
@@ -68,7 +83,9 @@ root/
 │   │   │   └── NLPsych_logo.png          
 │   │   ├── __init__.py
 │   │   ├── app.py
-│   │   └── launch.py
+│   │   ├── launch.py
+│   │   └── pages/
+│   │       └── Docs.py
 └── tests/              
 ````
 
