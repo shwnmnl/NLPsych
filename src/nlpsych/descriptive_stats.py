@@ -21,10 +21,41 @@ def descriptive_stats(
     avg_sentence_mode: Literal["unweighted", "ratio"] = "unweighted"
 ) -> Tuple[pd.DataFrame, Union[Dict[str, Any], Dict[str, Dict[str, Any]]]]:
     """
-    Compute per row text stats and aggregate overall.
-    DataFrame index is MultiIndex of source_column and original index.
-    avg_sentence_mode unweighted means mean of per sentence token counts.
-    avg_sentence_mode ratio means total tokens divided by total sentences.
+    Compute per-text descriptive statistics and aggregate summaries.
+
+    Parameters
+    ----------
+    *series_list : Iterable[pd.Series]
+        One or more pandas Series containing text. Each non-empty string row is
+        analyzed and tagged by source column and original index.
+    use_lemmas_for_uniques : bool, default=True
+        If True and a lemmatizer is available, unique-word counts are computed
+        from lemmas; otherwise raw lowercased token text is used.
+    split_overall : {"combined", "per_column", "both"}, default="combined"
+        Controls whether aggregate metrics are returned across all inputs,
+        per source column, or both.
+    nlp : Optional[spacy.Language], default=None
+        Optional preloaded spaCy pipeline. When None, the package default
+        lightweight English pipeline is loaded.
+    n_process : int, default=1
+        Number of worker processes passed to ``nlp.pipe``.
+    batch_size : int, default=256
+        Batch size used by ``nlp.pipe``.
+    words_must_be_alpha : bool, default=True
+        If True, only alphabetic tokens count as words.
+    drop_stopwords : bool, default=False
+        If True, spaCy stopwords are excluded from word-level statistics.
+    avg_sentence_mode : {"unweighted", "ratio"}, default="unweighted"
+        Sentence-length aggregation mode.
+        ``"unweighted"`` averages per-sentence counts; ``"ratio"`` uses
+        total words / total sentences.
+
+    Returns
+    -------
+    Tuple[pd.DataFrame, dict]
+        ``stats_df``: row-level metrics indexed by ``(source_column, index)``.
+        ``overall``: aggregate metrics in a dictionary, shaped according to
+        ``split_overall``.
     """
     if nlp is None:
         nlp = get_spacy_pipeline_base()
@@ -48,6 +79,19 @@ def descriptive_stats(
     texts = [r["text"] for r in rows]
 
     def keep_token(t: spacy.tokens.Token) -> bool:
+        """
+        Decide whether a token should count toward lexical statistics.
+
+        Parameters
+        ----------
+        t : spacy.tokens.Token
+            Token from a parsed spaCy document.
+
+        Returns
+        -------
+        bool
+            True when the token passes punctuation/space/alpha/stopword rules.
+        """
         if t.is_space or t.is_punct:
             return False
         if words_must_be_alpha and not t.is_alpha:
@@ -123,6 +167,20 @@ def descriptive_stats(
     pos_by_row = {(src, idx): c for src, idx, c in pos_full_list}
 
     def compute_overall(index_like) -> Dict[str, Any]:
+        """
+        Aggregate row-level stats and lexical/POS sets for a subset of rows.
+
+        Parameters
+        ----------
+        index_like
+            Index selector into ``stats_df`` (typically a MultiIndex slice).
+
+        Returns
+        -------
+        Dict[str, Any]
+            Combined totals and means, including POS distributions and lexical
+            diversity for the selected rows.
+        """
         sub = stats_df.loc[index_like]
         total_words = int(sub["word_count"].sum())
         vocab_union = set()

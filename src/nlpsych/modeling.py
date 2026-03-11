@@ -56,6 +56,22 @@ class TargetResult:
 
 
 def _detect_task(y: pd.Series, max_unique_for_class: int = 20) -> str:
+    """
+    Infer whether a target should be modeled as classification or regression.
+
+    Parameters
+    ----------
+    y : pd.Series
+        Target values for a single prediction target.
+    max_unique_for_class : int, default=20
+        Numeric targets with this many or fewer unique values are treated as
+        classification.
+
+    Returns
+    -------
+    str
+        ``"classification"`` or ``"regression"``.
+    """
     if y.dtype.name in {"category", "object", "bool"}:
         return "classification"
     if pd.api.types.is_integer_dtype(y) and y.nunique() <= max_unique_for_class:
@@ -66,6 +82,24 @@ def _detect_task(y: pd.Series, max_unique_for_class: int = 20) -> str:
 
 
 def _normalize_task_mode(task_mode: Optional[str]) -> str:
+    """
+    Normalize task-mode aliases to a canonical mode string.
+
+    Parameters
+    ----------
+    task_mode : Optional[str]
+        User-supplied task mode, including supported aliases.
+
+    Returns
+    -------
+    str
+        Canonical mode: ``"auto"``, ``"classification"``, or ``"regression"``.
+
+    Raises
+    ------
+    ValueError
+        If the provided mode is unsupported.
+    """
     if task_mode is None:
         return "auto"
     mode = str(task_mode).strip().lower()
@@ -88,6 +122,27 @@ def _resolve_target_task(
     task_mode: str,
     target_task_overrides: Optional[Dict[str, str]] = None,
 ) -> str:
+    """
+    Resolve final task type for one target with optional per-target override.
+
+    Parameters
+    ----------
+    target : str
+        Target column name.
+    y : pd.Series
+        Target values for the target.
+    max_unique_for_class : int
+        Cardinality threshold forwarded to automatic detection.
+    task_mode : str
+        Global task mode (``"auto"``, ``"classification"``, ``"regression"``).
+    target_task_overrides : Optional[Dict[str, str]], default=None
+        Optional per-target task-mode overrides.
+
+    Returns
+    -------
+    str
+        Final task type for this target.
+    """
     mode = task_mode
     if target_task_overrides:
         override_mode = target_task_overrides.get(str(target))
@@ -105,6 +160,32 @@ def _cv_iterator(
     random_state: int,
     groups: Optional[np.ndarray] = None,
 ):
+    """
+    Build an outer cross-validation splitter compatible with data constraints.
+
+    Parameters
+    ----------
+    task : str
+        Modeling task type (classification or regression).
+    y : np.ndarray
+        Target vector aligned to the current feature subset.
+    cv : int
+        Requested number of folds.
+    random_state : int
+        Random seed for shuffled splitters.
+    groups : Optional[np.ndarray], default=None
+        Optional group labels for group-aware cross-validation.
+
+    Returns
+    -------
+    object
+        A scikit-learn CV splitter instance.
+
+    Raises
+    ------
+    ValueError
+        If valid cross-validation folds cannot be constructed.
+    """
     n = len(y)
     if n < 2:
         raise ValueError("Not enough samples for cross validation")
@@ -187,12 +268,38 @@ def _cv_iterator(
 
 
 def _primary_metric(task: str):
+    """
+    Select the primary metric function for a task.
+
+    Parameters
+    ----------
+    task : str
+        ``"classification"`` or ``"regression"``.
+
+    Returns
+    -------
+    tuple
+        ``(metric_name, scorer_callable, larger_is_better)``.
+    """
     if task == "classification":
         return "accuracy", accuracy_score, True
     return "r2", r2_score, True
 
 
 def _metric_functions(task: str):
+    """
+    Return metric callables available for summary reporting.
+
+    Parameters
+    ----------
+    task : str
+        ``"classification"`` or ``"regression"``.
+
+    Returns
+    -------
+    Dict[str, callable]
+        Mapping of metric names to ``(y_true, y_pred) -> score`` functions.
+    """
     if task == "classification":
         return {
             "accuracy": lambda y_true, y_pred: accuracy_score(y_true, y_pred),
@@ -221,6 +328,25 @@ def _inner_cv(
     random_state: int,
     groups: Optional[np.ndarray] = None,
 ):
+    """
+    Build a lightweight inner CV splitter for hyperparameter tuning.
+
+    Parameters
+    ----------
+    task : str
+        Task type for the current target.
+    y : np.ndarray
+        Target values aligned to training rows.
+    random_state : int
+        Random seed used for shuffled splitters.
+    groups : Optional[np.ndarray], default=None
+        Optional group labels for group-aware inner CV.
+
+    Returns
+    -------
+    Optional[object]
+        CV splitter when feasible, otherwise ``None`` when data are too sparse.
+    """
     n = len(y)
     if groups is not None:
         groups_arr = np.asarray(groups)
@@ -263,6 +389,29 @@ def _build_selector(
     variance_threshold: float,
     n_features: int,
 ):
+    """
+    Build an optional feature-selection transformer.
+
+    Parameters
+    ----------
+    task : str
+        Task type used to pick the ANOVA score function.
+    feature_selection : Optional[str]
+        Selection mode: ``"kbest"``, ``"percentile"``, ``"variance"``, or None.
+    k_best : int
+        Candidate ``k`` for ``SelectKBest``.
+    percentile : int
+        Candidate percentile for ``SelectPercentile``.
+    variance_threshold : float
+        Threshold for ``VarianceThreshold``.
+    n_features : int
+        Maximum currently available features.
+
+    Returns
+    -------
+    object | None
+        Configured selector transformer, or ``None`` when disabled.
+    """
     if n_features < 1:
         return None
     score_func = f_classif if task == "classification" else f_regression
@@ -282,6 +431,23 @@ def _build_reducer(
     n_components: Optional[int],
     max_components: int,
 ):
+    """
+    Build an optional dimensionality reducer for the modeling pipeline.
+
+    Parameters
+    ----------
+    reduce_method : Optional[str]
+        Requested reduction method (currently only ``"pca"`` is supported).
+    n_components : Optional[int]
+        Desired number of components.
+    max_components : int
+        Upper bound allowed by sample/feature counts.
+
+    Returns
+    -------
+    object | None
+        Configured reducer instance, or ``None`` when reduction is skipped.
+    """
     if not reduce_method or max_components < 1:
         return None
     method = str(reduce_method).lower()
@@ -307,6 +473,25 @@ def _build_reducer(
 
 
 def _build_pipeline(base_model, selector, reducer, scale_X: bool):
+    """
+    Assemble the modeling pipeline in preprocessing-to-model order.
+
+    Parameters
+    ----------
+    base_model
+        Final estimator step.
+    selector
+        Optional feature selector.
+    reducer
+        Optional dimensionality reducer.
+    scale_X : bool
+        Whether to add ``StandardScaler`` as the first step.
+
+    Returns
+    -------
+    sklearn.pipeline.Pipeline
+        Pipeline ready for fit/predict within CV loops.
+    """
     steps = []
     if scale_X:
         steps.append(("scaler", StandardScaler()))
@@ -327,6 +512,36 @@ def _fit_and_score_cv(
     scorer,
     groups: Optional[np.ndarray] = None,
 ) -> Tuple[List[float], np.ndarray]:
+    """
+    Fit an estimator across CV folds and return fold scores and OOF predictions.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Feature matrix for the current target.
+    y : np.ndarray
+        Target vector aligned to ``X``.
+    task : str
+        Task type determining splitter arguments.
+    base_model
+        Estimator or search object to clone for each fold.
+    cv_splits
+        Fitted/initialized CV splitter.
+    scorer
+        Callable scoring function receiving ``(y_true, y_pred)``.
+    groups : Optional[np.ndarray], default=None
+        Optional group labels to pass to splitters and grouped model fitting.
+
+    Returns
+    -------
+    Tuple[List[float], np.ndarray]
+        Per-fold scores and out-of-fold predictions aligned to ``y``.
+
+    Raises
+    ------
+    ValueError
+        If a fold produces a non-finite score.
+    """
     scores: List[float] = []
     preds = np.empty_like(y, dtype=float)
     split_kwargs = {"X": X}
@@ -365,6 +580,39 @@ def _perm_test(
     rng: np.random.RandomState,
     groups: Optional[np.ndarray] = None,
 ) -> Tuple[List[float], float]:
+    """
+    Run a label-permutation significance test using cross-validated scoring.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Feature matrix.
+    y : np.ndarray
+        True target values.
+    task : str
+        Task type for score computation.
+    estimator
+        Base estimator evaluated in each permutation.
+    cv_splits
+        Outer CV splitter.
+    scorer
+        Fold scoring callable.
+    observed : float
+        Observed cross-validated score from unpermuted labels.
+    n_perm : int
+        Number of label permutations.
+    larger_is_better : bool
+        Direction of evidence for the metric.
+    rng : np.random.RandomState
+        Random generator used for permutations.
+    groups : Optional[np.ndarray], default=None
+        Optional group labels passed to fold splitting.
+
+    Returns
+    -------
+    Tuple[List[float], float]
+        Mean score from each permutation and permutation-test p-value.
+    """
     perm_scores = []
     for _ in range(n_perm):
         y_perm = rng.permutation(y)
@@ -378,6 +626,19 @@ def _perm_test(
 
 
 def _normalize_correction_method(method: Optional[str]) -> Optional[str]:
+    """
+    Normalize multiple-comparisons correction method input.
+
+    Parameters
+    ----------
+    method : Optional[str]
+        User-supplied correction method name or disabled flag.
+
+    Returns
+    -------
+    Optional[str]
+        Normalized method string, or ``None`` when correction is disabled.
+    """
     if method is None:
         return None
     m = str(method).strip().lower()

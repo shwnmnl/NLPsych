@@ -28,22 +28,20 @@ def embed_text_columns_simple_base(
 
     Parameters
     ----------
-    series_list
-        List of pandas Series. Each row that is a non empty string will be used.
-        The Series.name is preserved as source_column.
-    model_name
-        Hugging Face model name or local path.
-    normalize
-        If True, return L2 normalized embeddings.
+    series_list : List[pd.Series]
+        Text series to encode. Non-empty string rows are included and tracked
+        with source column and index metadata.
+    model_name : str, default="all-MiniLM-L6-v2"
+        SentenceTransformer model identifier or local model path.
+    normalize : bool, default=True
+        Whether to return L2-normalized embeddings.
 
     Returns
     -------
-    meta_df
-        DataFrame with two columns, source_column and index, aligned to embeddings.
-    embeddings
-        NumPy array of shape (n_samples, dim).
-    texts
-        The raw texts in the same order as the embeddings.
+    Tuple[pd.DataFrame, np.ndarray, List[str]]
+        ``meta_df`` with ``index`` and ``source_column`` columns,
+        ``embeddings`` as an array of shape ``(n_samples, dim)``, and
+        ``texts`` aligned with each embedding row.
     """
     model = get_st_model_base(model_name)
     texts: List[str] = []
@@ -77,12 +75,35 @@ def reduce_embeddings(
     tsne_n_iter: Optional[int] = None,
 ) -> np.ndarray:
     """
-    Reduce embeddings to 2 or 3 dimensions using UMAP, t SNE, or PCA.
+    Reduce embedding vectors to 2D or 3D coordinates.
+
+    Parameters
+    ----------
+    embeddings : np.ndarray
+        Input embedding matrix with shape ``(n_samples, n_features)``.
+    method : {"umap", "tsne", "pca"}, default="pca"
+        Projection algorithm to apply.
+    n_components : int, default=2
+        Number of output dimensions (must be 2 or 3).
+    random_state : int, default=1
+        Random seed for stochastic reducers.
+    metric : str, default="cosine"
+        Distance metric for UMAP/t-SNE where applicable.
+    umap_n_neighbors : Optional[int], default=None
+        Optional UMAP neighborhood size override.
+    umap_min_dist : Optional[float], default=None
+        Optional UMAP minimum distance override.
+    tsne_perplexity : Optional[float], default=None
+        Optional t-SNE perplexity override; clipped to safe values when needed.
+    tsne_learning_rate : Optional[float], default=None
+        Optional t-SNE learning-rate override.
+    tsne_n_iter : Optional[int], default=None
+        Optional t-SNE iteration count override.
 
     Returns
     -------
-    Z
-        Array of shape (n_samples, n_components).
+    np.ndarray
+        Projected coordinate matrix of shape ``(n_samples, n_components)``.
     """
     if embeddings.ndim != 2:
         raise ValueError("embeddings must be a 2D array")
@@ -159,7 +180,23 @@ def reduce_embeddings(
 
 def build_plot_df(Z: np.ndarray, meta: pd.DataFrame, texts: List[str]) -> pd.DataFrame:
     """
-    Combine reduced coordinates with metadata and texts for plotting.
+    Assemble plotting coordinates, metadata, and original text into one table.
+
+    Parameters
+    ----------
+    Z : np.ndarray
+        Reduced coordinates with shape ``(n_samples, n_components)``.
+    meta : pd.DataFrame
+        Metadata aligned to ``Z`` rows (typically includes ``index`` and
+        ``source_column``).
+    texts : List[str]
+        Raw texts aligned to ``Z`` rows.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing coordinate columns (``dim_1``, ``dim_2``, ...)
+        plus metadata and text for visualization.
     """
     if Z.ndim != 2:
         raise ValueError("Z must be a 2D array")
@@ -190,8 +227,40 @@ def plot_projection(
     hide_axes: bool = False,
 ):
     """
-    Build a Plotly figure for the projection.
-    Styling options let callers override color palettes, opacity, and backgrounds.
+    Build a Plotly scatter figure from reduced embedding coordinates.
+
+    Parameters
+    ----------
+    plot_df : pd.DataFrame
+        DataFrame from ``build_plot_df`` with coordinate columns.
+    n_components : int, default=2
+        Projection dimensionality to render (2 for ``scatter``, 3 for
+        ``scatter_3d``).
+    color_by : Optional[str], default="source_column"
+        Column name used for color mapping when present.
+    point_size : int, default=7
+        Marker size.
+    point_opacity : float, default=0.9
+        Marker opacity.
+    color_discrete_sequence : Optional[list], default=None
+        Optional Plotly discrete palette.
+    color_continuous_scale : Optional[list], default=None
+        Optional Plotly continuous palette.
+    template : Optional[str], default="plotly_white"
+        Plotly layout template name.
+    plot_bgcolor : Optional[str], default=None
+        Optional plotting area background color.
+    paper_bgcolor : Optional[str], default=None
+        Optional figure paper background color.
+    show_legend : bool, default=True
+        Whether to display legend/colorbar.
+    hide_axes : bool, default=False
+        If True, axis lines, grids, and tick labels are hidden.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Configured 2D or 3D scatter figure.
     """
     hover_cols = ["text"]
     for c in ["source_column", "index"]:

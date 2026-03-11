@@ -7,11 +7,38 @@ import pandas as pd
 import numpy as np
 
 def _pick_overall(overall_obj):
+    """
+    Normalize overall stats payloads to a single aggregate dictionary.
+
+    Parameters
+    ----------
+    overall_obj
+        Overall stats output that may be a plain dict or a dict containing a
+        ``"combined"`` key.
+
+    Returns
+    -------
+    dict
+        Combined overall statistics dictionary, or an empty dict when missing.
+    """
     if isinstance(overall_obj, dict) and "combined" in overall_obj:
         return overall_obj["combined"]
     return overall_obj or {}
 
 def interpret_stats(overall: dict) -> list[str]:
+    """
+    Generate short natural-language interpretations of descriptive statistics.
+
+    Parameters
+    ----------
+    overall : dict
+        Aggregate descriptive-statistics dictionary.
+
+    Returns
+    -------
+    list[str]
+        Human-readable interpretation bullets derived from key metrics.
+    """
     out: List[str] = []
     if not overall:
         return out
@@ -47,6 +74,19 @@ def interpret_stats(overall: dict) -> list[str]:
 
 
 def _has_nonempty(val: Any) -> bool:
+    """
+    Check whether a value should count as populated for reporting logic.
+
+    Parameters
+    ----------
+    val : Any
+        Candidate value.
+
+    Returns
+    -------
+    bool
+        True when the value is not None/empty after type-aware checks.
+    """
     if val is None:
         return False
     if isinstance(val, (str, bytes)):
@@ -57,6 +97,19 @@ def _has_nonempty(val: Any) -> bool:
 
 
 def _pairs_to_dict(val: Any) -> Dict[str, str]:
+    """
+    Convert mapping-like inputs to a string-keyed dictionary.
+
+    Parameters
+    ----------
+    val : Any
+        Either a dict or an iterable of 2-item pairs.
+
+    Returns
+    -------
+    Dict[str, str]
+        Normalized dictionary with string keys and values.
+    """
     if isinstance(val, dict):
         return {str(k): str(v) for k, v in val.items()}
     if isinstance(val, (list, tuple)):
@@ -69,6 +122,21 @@ def _pairs_to_dict(val: Any) -> Dict[str, str]:
 
 
 def _advanced_settings_notes(model_config: Optional[Dict[str, Any]], target: Optional[str] = None) -> List[str]:
+    """
+    Summarize advanced modeling settings into report-ready note strings.
+
+    Parameters
+    ----------
+    model_config : Optional[Dict[str, Any]]
+        Modeling configuration dictionary.
+    target : Optional[str], default=None
+        Target name used to resolve per-target task overrides.
+
+    Returns
+    -------
+    List[str]
+        Descriptive notes for non-default/advanced settings.
+    """
     if not isinstance(model_config, dict):
         return []
 
@@ -129,6 +197,21 @@ def _advanced_settings_notes(model_config: Optional[Dict[str, Any]], target: Opt
 
 
 def interpret_model_row(row: pd.Series, model_config: Optional[Dict[str, Any]] = None) -> list[str]:
+    """
+    Create interpretation bullets for one modeling-results row.
+
+    Parameters
+    ----------
+    row : pd.Series
+        One row from the modeling results table.
+    model_config : Optional[Dict[str, Any]], default=None
+        Optional modeling configuration used to mention advanced settings.
+
+    Returns
+    -------
+    list[str]
+        Interpretation bullets describing model quality and significance.
+    """
     out: List[str] = []
     metric = str(row.get("metric_name", "")).upper()
     score_raw = row.get("observed", np.nan)
@@ -223,6 +306,23 @@ def summarize_model_row(
     include_adjusted: bool = True,
     model_config: Optional[Dict[str, Any]] = None,
 ) -> str:
+    """
+    Build a narrative one-paragraph summary for one model result.
+
+    Parameters
+    ----------
+    row : pd.Series
+        One row from the modeling results table.
+    include_adjusted : bool, default=True
+        Whether to prefer adjusted p-values in the sentence when available.
+    model_config : Optional[Dict[str, Any]], default=None
+        Optional modeling configuration used to append advanced-setting notes.
+
+    Returns
+    -------
+    str
+        Human-readable summary sentence block for reporting.
+    """
     target = str(row.get("target", "target"))
     task = str(row.get("task", "classification"))
     metric = str(row.get("metric_name", "score")).upper()
@@ -292,15 +392,58 @@ def summarize_model_row(
     return " ".join(parts)
 
 def _to_html_table(df: pd.DataFrame, index: bool = False) -> str:
+    """
+    Render a DataFrame as HTML with report table styling.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Table to render.
+    index : bool, default=False
+        Whether to include the DataFrame index in output.
+
+    Returns
+    -------
+    str
+        HTML table markup.
+    """
     return df.to_html(index=index, classes="table", border=0, float_format=lambda x: f"{x:.3f}" if isinstance(x, float) else x)
 
 def _df_to_markdown_safe(df: pd.DataFrame, index: bool = False) -> str:
+    """
+    Convert a DataFrame to Markdown with a plain-text fallback.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Table to serialize.
+    index : bool, default=False
+        Whether to include the DataFrame index in output.
+
+    Returns
+    -------
+    str
+        Markdown table when available, otherwise ``to_string`` output.
+    """
     try:
         return df.to_markdown(index=index)
     except Exception:
         return df.to_string(index=index)
 
 def _stringify_config_value(val: Any) -> str:
+    """
+    Convert configuration values to compact display strings.
+
+    Parameters
+    ----------
+    val : Any
+        Raw configuration value.
+
+    Returns
+    -------
+    str
+        Stringified representation suitable for report tables.
+    """
     if val is None:
         return "None"
     if isinstance(val, (list, tuple, set)):
@@ -310,6 +453,21 @@ def _stringify_config_value(val: Any) -> str:
     return str(val)
 
 def _config_to_df(config: Optional[Dict[str, Any]], exclude_keys: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
+    """
+    Convert a configuration dictionary into a two-column report DataFrame.
+
+    Parameters
+    ----------
+    config : Optional[Dict[str, Any]]
+        Configuration mapping to render.
+    exclude_keys : Optional[List[str]], default=None
+        Keys to omit from the rendered output.
+
+    Returns
+    -------
+    Optional[pd.DataFrame]
+        DataFrame with ``Setting``/``Value`` columns, or ``None`` when empty.
+    """
     if not config:
         return None
     exclude = set(exclude_keys or [])
@@ -337,7 +495,33 @@ def build_report_payload(
     embed_config: Optional[Dict[str, Any]] = None,
     model_config: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, str]:
-    """Returns HTML and Markdown versions of the same report."""
+    """
+    Build full HTML and Markdown session reports from analysis outputs.
+
+    Parameters
+    ----------
+    text_cols : list[str]
+        Text columns selected in the session.
+    stats_df : Optional[pd.DataFrame]
+        Row-level descriptive statistics table.
+    overall_obj : Optional[dict]
+        Aggregate descriptive statistics payload.
+    plot_df : Optional[pd.DataFrame]
+        Embedding/projection table used to infer projection availability.
+    results_df : Optional[pd.DataFrame]
+        Modeling results table.
+    stats_config : Optional[Dict[str, Any]], default=None
+        Descriptive-stats configuration for report display.
+    embed_config : Optional[Dict[str, Any]], default=None
+        Embedding/projection configuration for report display.
+    model_config : Optional[Dict[str, Any]], default=None
+        Modeling configuration for report display and interpretations.
+
+    Returns
+    -------
+    Tuple[str, str]
+        ``(html_report, md_report)`` versions of the same report content.
+    """
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # Prepare sections
