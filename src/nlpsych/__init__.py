@@ -9,7 +9,11 @@ from importlib.metadata import version
 __version__ = version("nlpsych")
 
 from .utils import get_spacy_pipeline_base, get_st_model_base
-from .descriptive_stats import descriptive_stats
+from .descriptive_stats import (
+    descriptive_stats,
+    build_descriptive_summary_table,
+    descriptive_summary_table_to_latex,
+)
 from .embedding import (
     embed_text_columns_simple_base as embed_text_columns_simple,
     reduce_embeddings,
@@ -23,6 +27,8 @@ __all__ = [
     "get_spacy_pipeline_base",
     "get_st_model_base",
     "descriptive_stats",
+    "build_descriptive_summary_table",
+    "descriptive_summary_table_to_latex",
     "embed_text_columns_simple",
     "reduce_embeddings",
     "build_plot_df",

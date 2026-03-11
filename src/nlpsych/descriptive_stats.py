@@ -9,6 +9,300 @@ from nlpsych.utils import get_spacy_pipeline_base
 # ===== Section: Core text stats =====
 SplitOverall = Literal["combined", "per_column", "both"]
 
+
+def _split_overall_payload(
+    overall_obj: Optional[Union[Dict[str, Any], Dict[str, Dict[str, Any]]]]
+) -> Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]:
+    """
+    Normalize overall payloads into combined and per-column components.
+
+    Parameters
+    ----------
+    overall_obj : Optional[Union[Dict[str, Any], Dict[str, Dict[str, Any]]]]
+        Output object returned by ``descriptive_stats`` for any split mode.
+
+    Returns
+    -------
+    Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]
+        ``(combined, per_column)`` dictionaries. Missing parts are empty dicts.
+    """
+    combined: Dict[str, Any] = {}
+    per_column: Dict[str, Dict[str, Any]] = {}
+    if not isinstance(overall_obj, dict) or not overall_obj:
+        return combined, per_column
+
+    if isinstance(overall_obj.get("combined"), dict):
+        combined = dict(overall_obj["combined"])
+        per_raw = overall_obj.get("per_column")
+        if isinstance(per_raw, dict):
+            per_column = {
+                str(k): v for k, v in per_raw.items() if isinstance(v, dict)
+            }
+        return combined, per_column
+
+    if overall_obj and all(isinstance(v, dict) for v in overall_obj.values()):
+        per_column = {str(k): v for k, v in overall_obj.items()}
+        return combined, per_column
+
+    combined = dict(overall_obj)
+    return combined, per_column
+
+
+def build_descriptive_summary_table(
+    stats_df: pd.DataFrame,
+    overall_obj: Optional[Union[Dict[str, Any], Dict[str, Dict[str, Any]]]] = None,
+    decimals: int = 3,
+    include_combined: bool = True,
+    include_per_column: bool = True,
+) -> pd.DataFrame:
+    """
+    Build a publication-ready summary table from descriptive-statistics outputs.
+
+    Parameters
+    ----------
+    stats_df : pd.DataFrame
+        Row-level output DataFrame from ``descriptive_stats``.
+    overall_obj : Optional[Union[Dict[str, Any], Dict[str, Dict[str, Any]]]], default=None
+        Overall aggregate output from ``descriptive_stats`` in any split mode.
+    decimals : int, default=3
+        Number of decimal places for floating-point columns.
+    include_combined : bool, default=True
+        Include an all-columns combined row.
+    include_per_column : bool, default=True
+        Include one row per source text column.
+
+    Returns
+    -------
+    pd.DataFrame
+        Tidy summary table suitable for display or export in papers/reports.
+    """
+    columns = [
+        "Corpus",
+        "N Texts",
+        "Total Characters",
+        "Total Words",
+        "Total Sentences",
+        "Mean Words / Text",
+        "SD Words / Text",
+        "Mean Sentence Length",
+        "SD Sentence Length",
+        "Mean Word Length",
+        "SD Word Length",
+        "Total Unique Words",
+        "Lexical Diversity (TTR)",
+    ]
+    if not isinstance(stats_df, pd.DataFrame) or stats_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    combined_overall, per_column_overall = _split_overall_payload(overall_obj)
+
+    def _float_or_nan(value: Any) -> float:
+        """
+        Convert a value to float, returning NaN when conversion fails.
+
+        Parameters
+        ----------
+        value : Any
+            Candidate numeric value.
+
+        Returns
+        -------
+        float
+            Parsed float value or ``nan``.
+        """
+        if value is None:
+            return float("nan")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float("nan")
+
+    def _int_or_nan(value: Any):
+        """
+        Convert a value to integer, returning pandas NA when invalid.
+
+        Parameters
+        ----------
+        value : Any
+            Candidate integer-like value.
+
+        Returns
+        -------
+        int | pandas.NA
+            Parsed integer or missing marker.
+        """
+        if value is None:
+            return pd.NA
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return pd.NA
+
+    def _build_row(
+        label: str,
+        sub_df: pd.DataFrame,
+        overall_stats: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Compute one summary row from row-level stats plus optional aggregates.
+
+        Parameters
+        ----------
+        label : str
+            Row label (for example, ``Combined`` or a source column name).
+        sub_df : pd.DataFrame
+            Subset of ``stats_df`` rows represented by this summary row.
+        overall_stats : Optional[Dict[str, Any]], default=None
+            Optional precomputed aggregate metrics for this subset.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary aligned to the summary-table columns.
+        """
+        overall_stats = overall_stats if isinstance(overall_stats, dict) else {}
+        total_words = int(overall_stats.get("total_words", int(sub_df["word_count"].sum())))
+        total_sentences = int(overall_stats.get("total_sentences", int(sub_df["sentence_count"].sum())))
+        total_chars = int(overall_stats.get("total_chars", int(sub_df["char_count"].sum())))
+        total_unique_words_raw = overall_stats.get("total_unique_words")
+        total_unique_words = _int_or_nan(total_unique_words_raw)
+
+        lexical_diversity = _float_or_nan(overall_stats.get("lexical_diversity"))
+        if pd.isna(lexical_diversity):
+            if total_unique_words is not pd.NA and total_words > 0:
+                lexical_diversity = float(total_unique_words) / float(total_words)
+            else:
+                lexical_diversity = _float_or_nan(sub_df["lexical_diversity"].mean())
+
+        return {
+            "Corpus": str(label),
+            "N Texts": int(len(sub_df)),
+            "Total Characters": total_chars,
+            "Total Words": total_words,
+            "Total Sentences": total_sentences,
+            "Mean Words / Text": float(sub_df["word_count"].mean()),
+            "SD Words / Text": float(sub_df["word_count"].std(ddof=1)) if len(sub_df) > 1 else 0.0,
+            "Mean Sentence Length": _float_or_nan(overall_stats.get("avg_sentence_length"))
+            if "avg_sentence_length" in overall_stats
+            else float(sub_df["avg_sentence_length"].mean()),
+            "SD Sentence Length": float(sub_df["avg_sentence_length"].std(ddof=1)) if len(sub_df) > 1 else 0.0,
+            "Mean Word Length": _float_or_nan(overall_stats.get("avg_word_length"))
+            if "avg_word_length" in overall_stats
+            else float(sub_df["avg_word_length"].mean()),
+            "SD Word Length": float(sub_df["avg_word_length"].std(ddof=1)) if len(sub_df) > 1 else 0.0,
+            "Total Unique Words": total_unique_words,
+            "Lexical Diversity (TTR)": lexical_diversity,
+        }
+
+    source_col_count = 1
+    if isinstance(stats_df.index, pd.MultiIndex) and stats_df.index.nlevels >= 1:
+        source_col_count = int(stats_df.index.get_level_values(0).nunique())
+        source_col_count = max(1, source_col_count)
+
+    include_combined_effective = bool(include_combined)
+    if include_combined_effective and include_per_column and source_col_count == 1:
+        include_combined_effective = False
+
+    rows = []
+    if include_combined_effective:
+        rows.append(_build_row("Combined", stats_df, combined_overall))
+
+    if include_per_column and isinstance(stats_df.index, pd.MultiIndex) and stats_df.index.nlevels >= 1:
+        for source_column, sub_df in stats_df.groupby(level=0, sort=True):
+            source_key = str(source_column)
+            rows.append(_build_row(source_key, sub_df, per_column_overall.get(source_key)))
+
+    if not rows:
+        return pd.DataFrame(columns=columns)
+
+    summary_df = pd.DataFrame(rows, columns=columns)
+    int_cols = [
+        "N Texts",
+        "Total Characters",
+        "Total Words",
+        "Total Sentences",
+        "Total Unique Words",
+    ]
+    for col in int_cols:
+        summary_df[col] = pd.to_numeric(summary_df[col], errors="coerce").astype("Int64")
+
+    float_cols = [c for c in summary_df.columns if c not in {"Corpus", *int_cols}]
+    summary_df[float_cols] = summary_df[float_cols].apply(pd.to_numeric, errors="coerce").round(int(decimals))
+
+    order = np.where(summary_df["Corpus"].astype(str).eq("Combined"), 0, 1)
+    summary_df["_order"] = order
+    summary_df = summary_df.sort_values(["_order", "Corpus"], kind="stable").drop(columns=["_order"]).reset_index(drop=True)
+    return summary_df
+
+
+def descriptive_summary_table_to_latex(
+    summary_df: pd.DataFrame,
+    decimals: int = 3,
+) -> str:
+    """
+    Convert a summary table to a vertical, manuscript-friendly LaTeX table.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Output from ``build_descriptive_summary_table``.
+    decimals : int, default=3
+        Decimal precision used for floating-point values.
+
+    Returns
+    -------
+    str
+        LaTeX ``tabular`` string using booktabs-style horizontal rules with no
+        vertical separators, in long/vertical metric layout.
+    """
+    latex_columns = ["Corpus", "Metric", "Value"]
+    if not isinstance(summary_df, pd.DataFrame) or summary_df.empty:
+        empty = pd.DataFrame(columns=latex_columns)
+        return empty.to_latex(index=False, escape=True, column_format="lll")
+
+    metric_columns = [c for c in summary_df.columns if c != "Corpus"]
+    rows = []
+
+    def _format_value_for_latex(value: Any) -> str:
+        """
+        Format a table cell value for manuscript-ready LaTeX output.
+
+        Parameters
+        ----------
+        value : Any
+            Raw value from the summary DataFrame.
+
+        Returns
+        -------
+        str
+            Rendered value string with integer grouping and fixed float precision.
+        """
+        if pd.isna(value):
+            return ""
+        if isinstance(value, (int, np.integer)):
+            return f"{int(value):,}"
+        if isinstance(value, (float, np.floating)):
+            return f"{float(value):.{int(decimals)}f}"
+        return str(value)
+
+    for _, row in summary_df.iterrows():
+        corpus = str(row.get("Corpus", ""))
+        for metric in metric_columns:
+            rows.append(
+                {
+                    "Corpus": corpus,
+                    "Metric": str(metric),
+                    "Value": _format_value_for_latex(row.get(metric)),
+                }
+            )
+
+    latex_df = pd.DataFrame(rows, columns=latex_columns)
+    return latex_df.to_latex(
+        index=False,
+        escape=True,
+        column_format="lll",
+    )
+
 def descriptive_stats(
     *series_list: Iterable[pd.Series],
     use_lemmas_for_uniques: bool = True,

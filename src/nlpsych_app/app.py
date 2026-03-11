@@ -24,7 +24,11 @@ if _SRC_ROOT_STR not in sys.path:
     sys.path.insert(0, _SRC_ROOT_STR)
 
 from nlpsych.utils import get_spacy_pipeline_base, get_st_model_base
-from nlpsych.descriptive_stats import descriptive_stats
+from nlpsych.descriptive_stats import (
+    descriptive_stats,
+    build_descriptive_summary_table,
+    descriptive_summary_table_to_latex,
+)
 from nlpsych.embedding import (
     embed_text_columns_simple_base,
     reduce_embeddings,
@@ -79,9 +83,30 @@ def main():
         return embed_text_columns_simple_base(series_list, model_name=model_name, normalize=normalize)
 
     # ===== Section: Utility for downloads =====
-    def df_to_csv_download(df: pd.DataFrame, filename: str):
-        csv = df.to_csv(index=True).encode("utf-8")
-        st.download_button("Download CSV", data=csv, file_name=filename, mime="text/csv")
+    def df_to_csv_download(
+        df: pd.DataFrame,
+        filename: str,
+        include_index: bool = True,
+        button_label: str = "Download CSV",
+    ):
+        csv = df.to_csv(index=include_index).encode("utf-8")
+        st.download_button(
+            button_label,
+            data=csv,
+            file_name=filename,
+            mime="text/csv",
+            key=f"dl_csv_{filename}",
+        )
+
+
+    def text_download(text: str, filename: str, button_label: str, mime: str = "text/plain"):
+        st.download_button(
+            button_label,
+            data=text.encode("utf-8"),
+            file_name=filename,
+            mime=mime,
+            key=f"dl_text_{filename}",
+        )
 
 
     def npy_download(arr: np.ndarray, filename: str):
@@ -453,6 +478,63 @@ def main():
             elif cached_df is not None:
                 st.caption("Cached results exist but options changed. Press Recompute descriptive stats to refresh.")
 
+        def render_descriptive_outputs(stats_df_show: pd.DataFrame, overall_show):
+            st.write("Per row stats")
+            st.dataframe(stats_df_show, width='stretch')
+            df_to_csv_download(stats_df_show, "per_row_stats.csv")
+
+            summary_df = build_descriptive_summary_table(
+                stats_df=stats_df_show,
+                overall_obj=overall_show,
+                decimals=3,
+            )
+            st.write("Summary table (paper-ready)")
+            if summary_df.empty:
+                st.info("Summary table could not be built from the current stats output.")
+            else:
+                st.dataframe(summary_df, width='stretch')
+                dl_col_a, dl_col_b, dl_col_c = st.columns(3)
+                with dl_col_a:
+                    df_to_csv_download(
+                        summary_df,
+                        "descriptive_summary_table.csv",
+                        include_index=False,
+                        button_label="Download summary CSV",
+                    )
+                md_table = summary_df.to_markdown(index=False)
+                latex_table = descriptive_summary_table_to_latex(summary_df, decimals=3)
+                with dl_col_b:
+                    text_download(
+                        md_table,
+                        "descriptive_summary_table.md",
+                        button_label="Download summary Markdown",
+                        mime="text/markdown",
+                    )
+                with dl_col_c:
+                    text_download(
+                        latex_table,
+                        "descriptive_summary_table.tex",
+                        button_label="Download summary LaTeX",
+                        mime="text/plain",
+                    )
+                with st.expander("Copy-ready formats"):
+                    st.caption("Use Markdown for docs and scientific LaTeX (vertical metric layout with horizontal rules).")
+                    st.text_area(
+                        "Markdown table",
+                        value=md_table,
+                        height=180,
+                        key="stats_summary_markdown_text",
+                    )
+                    st.text_area(
+                        "LaTeX table",
+                        value=latex_table,
+                        height=220,
+                        key="stats_summary_latex_text",
+                    )
+
+            st.write("Overall stats")
+            st.json(overall_show)
+
         if run_stats:
             try:
                 nlp = get_spacy_pipeline()
@@ -468,11 +550,7 @@ def main():
                     drop_stopwords=drop_stopwords,
                     avg_sentence_mode=avg_sent_mode
                 )
-                st.write("Per row stats")
-                st.dataframe(stats_df, width='stretch')
-                df_to_csv_download(stats_df, "per_row_stats.csv")
-                st.write("Overall stats")
-                st.json(overall)
+                render_descriptive_outputs(stats_df, overall)
 
                 st.session_state["stats_df"] = stats_df
                 st.session_state["overall"] = overall
@@ -483,11 +561,7 @@ def main():
             if cached_df is None or cached_overall is None:
                 st.info("Press Compute descriptive stats to generate stats.")
             else:
-                st.write("Per row stats")
-                st.dataframe(cached_df, width='stretch')
-                df_to_csv_download(cached_df, "per_row_stats.csv")
-                st.write("Overall stats")
-                st.json(cached_overall)
+                render_descriptive_outputs(cached_df, cached_overall)
 
 
     # ===== Tab: Embeddings =====

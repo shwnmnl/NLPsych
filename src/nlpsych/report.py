@@ -6,6 +6,8 @@ from typing import Optional, List, Tuple, Dict, Any
 import pandas as pd
 import numpy as np
 
+from nlpsych.descriptive_stats import build_descriptive_summary_table
+
 def _pick_overall(overall_obj):
     """
     Normalize overall stats payloads to a single aggregate dictionary.
@@ -525,6 +527,14 @@ def build_report_payload(
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # Prepare sections
+    stats_summary_df = None
+    if isinstance(stats_df, pd.DataFrame) and len(stats_df):
+        stats_summary_df = build_descriptive_summary_table(
+            stats_df=stats_df,
+            overall_obj=overall_obj,
+            decimals=3,
+        )
+
     stats_overall = _pick_overall(overall_obj) if overall_obj else {}
     stats_rows = []
     if stats_overall:
@@ -630,10 +640,15 @@ def build_report_payload(
     # Stats card
     html_parts.append('<div class="card">')
     html_parts.append('<div class="section-title">Descriptive statistics</div>')
-    if stats_table_df is None:
+    if stats_table_df is None and stats_summary_df is None:
         html_parts.append('<p class="muted">No descriptive statistics were available. Run the Descriptive stats tab first.</p>')
     else:
-        html_parts.append(_to_html_table(stats_table_df, index=False))
+        if stats_summary_df is not None:
+            html_parts.append('<p><strong>Summary table</strong></p>')
+            html_parts.append(_to_html_table(stats_summary_df, index=False))
+        if stats_table_df is not None:
+            html_parts.append('<p><strong>Key totals</strong></p>')
+            html_parts.append(_to_html_table(stats_table_df, index=False))
         if stats_interps:
             html_parts.append('<p><strong>Interpretation</strong></p>')
             html_parts.append('<ul>')
@@ -693,10 +708,15 @@ def build_report_payload(
     md_parts.append(f"Selected text columns: {', '.join(text_cols)}\n")
 
     md_parts.append("## Descriptive statistics")
-    if stats_table_df is None:
+    if stats_table_df is None and stats_summary_df is None:
         md_parts.append("No descriptive statistics were available. Run the Descriptive stats tab first.")
     else:
-        md_parts.append(stats_table_df.to_markdown(index=False))
+        if stats_summary_df is not None:
+            md_parts.append("Summary table")
+            md_parts.append(_df_to_markdown_safe(stats_summary_df, index=False))
+        if stats_table_df is not None:
+            md_parts.append("Key totals")
+            md_parts.append(_df_to_markdown_safe(stats_table_df, index=False))
         if stats_interps:
             md_parts.append("Interpretation")
             for s in stats_interps:
