@@ -1664,6 +1664,68 @@ def main():
                 line_color = st.color_picker("Observed line color", "#d62728")
                 line_width = st.slider("Observed line width", min_value=1, max_value=6, value=2, step=1)
                 height_per_row = st.slider("Height per row (px)", min_value=240, max_value=700, value=320, step=20)
+                x_axis_label = st.text_input("X-axis label", "Score")
+                y_axis_label = st.text_input("Y-axis label", "Count")
+                figure_title = st.text_input("Figure title (optional)", "")
+                figure_title_align = st.selectbox(
+                    "Figure title alignment",
+                    ["Center", "Left"],
+                    index=0,
+                )
+
+                target_label_map: dict[str, str] = {}
+                target_bar_colors: dict[str, str] = {}
+                target_line_colors: dict[str, str] = {}
+
+                style_targets: list[str] = []
+                style_results = st.session_state.get("results_df")
+                if isinstance(style_results, pd.DataFrame) and len(style_results) and "target" in style_results.columns:
+                    style_targets = [str(t) for t in style_results["target"].astype(str).tolist()]
+                elif target_cols:
+                    style_targets = [str(t) for t in target_cols]
+                style_targets = list(dict.fromkeys(style_targets))
+
+                per_target_custom = st.checkbox(
+                    "Customize each histogram (labels and colors)",
+                    value=False,
+                    disabled=not style_targets,
+                )
+                if not style_targets:
+                    st.caption("Run modeling (or select targets) to enable per-target overrides.")
+
+                if per_target_custom and style_targets:
+                    with st.expander("Per-target overrides", expanded=False):
+                        st.caption("Set custom subplot labels and colors per target.")
+                        for i, tgt in enumerate(style_targets):
+                            key_suffix = f"{i}_{''.join(ch if ch.isalnum() else '_' for ch in tgt)}"
+                            default_hist_color = "#4c78a8"
+                            if isinstance(bar_color, str) and bar_color.strip():
+                                default_hist_color = bar_color
+                            elif palette:
+                                candidate = palette[i % len(palette)]
+                                if isinstance(candidate, str) and candidate.startswith("#"):
+                                    default_hist_color = candidate
+
+                            target_label = st.text_input(
+                                f"Label for {tgt}",
+                                value=tgt,
+                                key=f"perm_target_label_{key_suffix}",
+                            )
+                            target_hist_color = st.color_picker(
+                                f"Histogram color for {tgt}",
+                                value=default_hist_color,
+                                key=f"perm_target_hist_color_{key_suffix}",
+                            )
+                            target_obs_color = st.color_picker(
+                                f"Observed line color for {tgt}",
+                                value=line_color,
+                                key=f"perm_target_line_color_{key_suffix}",
+                            )
+
+                            if isinstance(target_label, str) and target_label.strip() and target_label.strip() != tgt:
+                                target_label_map[tgt] = target_label.strip()
+                            target_bar_colors[tgt] = target_hist_color
+                            target_line_colors[tgt] = target_obs_color
 
                 theme_options = {
                     "Plotly White": "plotly_white",
@@ -1690,6 +1752,13 @@ def main():
             "line_width": int(line_width),
             "height_per_row": int(height_per_row),
             "template": theme_value,
+            "x_axis_label": x_axis_label,
+            "y_axis_label": y_axis_label,
+            "figure_title": figure_title.strip() or None,
+            "figure_title_align": figure_title_align.lower(),
+            "target_label_map": target_label_map,
+            "target_bar_colors": target_bar_colors,
+            "target_line_colors": target_line_colors,
         }
 
         def _render_model_table(results_df: pd.DataFrame, model_config=None):
@@ -1747,11 +1816,35 @@ def main():
                         perm_rows.append((tgt, perm_scores, observed))
 
                 if perm_rows:
+                    target_label_map = style.get("target_label_map") or {}
+                    target_bar_colors = style.get("target_bar_colors") or {}
+                    target_line_colors = style.get("target_line_colors") or {}
+
+                    def _target_label(target_name) -> str:
+                        """
+                        Resolve display label for a target using style overrides.
+
+                        Parameters
+                        ----------
+                        target_name
+                            Raw target identifier.
+
+                        Returns
+                        -------
+                        str
+                            Label to show in subplot title and legend.
+                        """
+                        key = str(target_name)
+                        val = target_label_map.get(key)
+                        if isinstance(val, str) and val.strip():
+                            return val.strip()
+                        return key
+
                     n_plots = len(perm_rows)
                     grid_cols = max(1, min(style.get("grid_cols", 2), n_plots))
                     grid_rows = int(math.ceil(n_plots / grid_cols))
                     show_titles = style.get("show_titles", True)
-                    subplot_titles = [t[0] for t in perm_rows] if show_titles else None
+                    subplot_titles = [_target_label(t[0]) for t in perm_rows] if show_titles else None
 
                     fig = make_subplots(
                         rows=grid_rows,
@@ -1771,7 +1864,12 @@ def main():
                     for i, (tgt, perm_scores, observed) in enumerate(perm_rows):
                         row_idx = (i // grid_cols) + 1
                         col_idx = (i % grid_cols) + 1
-                        if bar_color:
+                        target_key = str(tgt)
+                        display_name = _target_label(target_key)
+                        target_override_color = target_bar_colors.get(target_key)
+                        if target_override_color:
+                            color = target_override_color
+                        elif bar_color:
                             color = bar_color
                         elif palette:
                             color = palette[i % len(palette)]
@@ -1784,16 +1882,17 @@ def main():
                                 nbinsx=nbins,
                                 marker_color=color,
                                 opacity=bar_opacity,
-                                name=str(tgt),
+                                name=display_name,
                                 showlegend=show_legend,
                             ),
                             row=row_idx,
                             col=col_idx,
                         )
                         if show_observed:
+                            line_color_for_target = target_line_colors.get(target_key, line_color)
                             fig.add_vline(
                                 x=observed,
-                                line_color=line_color,
+                                line_color=line_color_for_target,
                                 line_width=line_width,
                                 row=row_idx,
                                 col=col_idx,
@@ -1802,13 +1901,31 @@ def main():
                     template = style.get("template")
                     if template:
                         fig.update_layout(template=template)
-                    fig.update_layout(
-                        showlegend=show_legend,
-                        bargap=0.1,
-                        height=int(style.get("height_per_row", 320)) * grid_rows + 60,
-                    )
-                    fig.update_xaxes(title_text="Score")
-                    fig.update_yaxes(title_text="Count")
+                    layout_kwargs = {
+                        "showlegend": show_legend,
+                        "bargap": 0.1,
+                        "height": int(style.get("height_per_row", 320)) * grid_rows + 60,
+                    }
+                    figure_title = style.get("figure_title")
+                    title_align = str(style.get("figure_title_align", "center")).lower()
+                    if isinstance(figure_title, str) and figure_title.strip():
+                        if title_align == "left":
+                            layout_kwargs["title"] = {
+                                "text": figure_title.strip(),
+                                "x": 0.0,
+                                "xanchor": "left",
+                                "xref": "paper",
+                            }
+                        else:
+                            layout_kwargs["title"] = {
+                                "text": figure_title.strip(),
+                                "x": 0.5,
+                                "xanchor": "center",
+                                "xref": "paper",
+                            }
+                    fig.update_layout(**layout_kwargs)
+                    fig.update_xaxes(title_text=str(style.get("x_axis_label", "Score")))
+                    fig.update_yaxes(title_text=str(style.get("y_axis_label", "Count")))
 
                     st.plotly_chart(
                         fig,
