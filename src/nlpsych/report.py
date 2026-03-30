@@ -6,7 +6,10 @@ from typing import Optional, List, Tuple, Dict, Any
 import pandas as pd
 import numpy as np
 
-from nlpsych.descriptive_stats import build_descriptive_summary_table
+from nlpsych.descriptive_stats import (
+    build_descriptive_summary_table,
+    descriptive_summary_table_to_markdown,
+)
 
 def _pick_overall(overall_obj):
     """
@@ -186,6 +189,31 @@ def _advanced_settings_notes(model_config: Optional[Dict[str, Any]], target: Opt
     if isinstance(group_col, str) and group_col.strip():
         notes.append(f"group-aware CV using {group_col}")
 
+    text_feature_mode = str(model_config.get("text_feature_mode", "")).strip().lower()
+    model_text_cols = model_config.get("text_cols")
+    n_text_cols = len(model_text_cols) if isinstance(model_text_cols, (list, tuple)) else 0
+    if text_feature_mode == "separate" and n_text_cols > 1:
+        notes.append("independent model runs per selected text column")
+    elif text_feature_mode == "average" and n_text_cols > 1:
+        notes.append("mean-pooled embeddings across selected text columns")
+
+    n_perm = model_config.get("n_perm")
+    if n_perm is not None:
+        notes.append(f"permutation testing ({n_perm} iterations)")
+
+    correction_method = model_config.get("correction_method_label", model_config.get("correction_method"))
+    if isinstance(correction_method, str) and correction_method.strip() and correction_method.strip().lower() != "none":
+        correction_scope = str(model_config.get("correction_scope", "")).strip().lower()
+        correction_scope_label = {
+            "all_tests": "across all tested target/feature-set combinations",
+            "within_target": "within each target across feature sets",
+            "within_feature_set": "within each feature set across targets",
+        }.get(correction_scope)
+        if correction_scope_label:
+            notes.append(f"multiple-comparisons correction ({correction_method}; scope: {correction_scope_label})")
+        else:
+            notes.append(f"multiple-comparisons correction ({correction_method})")
+
     target_name = str(target) if target is not None else None
     override_map = _pairs_to_dict(model_config.get("target_task_overrides"))
     if target_name and target_name in override_map:
@@ -342,7 +370,6 @@ def summarize_model_row(
         if pd.notnull(legacy_fdr):
             p_adjusted = legacy_fdr if pd.isna(p_adjusted) else p_adjusted
             p_adjust_method = "fdr_bh"
-
     task_label = "classification" if task == "classification" else "regression"
     parts: List[str] = [f"For target {target}, we ran a {task_label} model"]
     if folds is not None and folds > 0:
@@ -577,11 +604,15 @@ def build_report_payload(
         p_adjust_available = "p_adjusted" in results_df.columns and results_df["p_adjusted"].notna().any()
         p_fdr_available = "p_fdr" in results_df.columns and results_df["p_fdr"].notna().any()
         if p_adjust_available:
-            show_cols.insert(5, "p_adjusted")
+            show_cols.insert(show_cols.index("p_value") + 1 if "p_value" in show_cols else len(show_cols), "p_adjusted")
         elif p_fdr_available:
-            show_cols.insert(5, "p_fdr")
+            show_cols.insert(show_cols.index("p_value") + 1 if "p_value" in show_cols else len(show_cols), "p_fdr")
         if "p_adjust_method" in results_df.columns and results_df["p_adjust_method"].notna().any():
-            show_cols.insert(6, "p_adjust_method")
+            anchor_idx = show_cols.index("p_adjusted") if "p_adjusted" in show_cols else show_cols.index("p_fdr") if "p_fdr" in show_cols else len(show_cols)
+            show_cols.insert(anchor_idx + 1, "p_adjust_method")
+        if "p_adjust_scope" in results_df.columns and results_df["p_adjust_scope"].notna().any():
+            anchor_idx = show_cols.index("p_adjust_method") if "p_adjust_method" in show_cols else len(show_cols)
+            show_cols.insert(anchor_idx + 1, "p_adjust_scope")
         extra_cols = [c for c in results_df.columns if c.startswith("metric_") and c != "metric_name"]
         show_cols.extend(extra_cols)
         show_cols = [c for c in show_cols if c in results_df.columns]
@@ -713,7 +744,7 @@ def build_report_payload(
     else:
         if stats_summary_df is not None:
             md_parts.append("Summary table")
-            md_parts.append(_df_to_markdown_safe(stats_summary_df, index=False))
+            md_parts.append(descriptive_summary_table_to_markdown(stats_summary_df, decimals=3))
         if stats_table_df is not None:
             md_parts.append("Key totals")
             md_parts.append(_df_to_markdown_safe(stats_table_df, index=False))

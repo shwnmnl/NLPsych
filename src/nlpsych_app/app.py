@@ -27,6 +27,7 @@ from nlpsych.utils import get_spacy_pipeline_base, get_st_model_base
 from nlpsych.descriptive_stats import (
     descriptive_stats,
     build_descriptive_summary_table,
+    descriptive_summary_table_to_markdown,
     descriptive_summary_table_to_latex,
 )
 from nlpsych.embedding import (
@@ -36,7 +37,7 @@ from nlpsych.embedding import (
     plot_projection,
 )
 from plotly.subplots import make_subplots
-from nlpsych.modeling import auto_cv_with_permutation
+from nlpsych.modeling import auto_cv_with_permutation, apply_multiple_comparisons_correction
 from nlpsych.report import build_report_payload, interpret_model_row, summarize_model_row
 
 
@@ -501,7 +502,7 @@ def main():
                         include_index=False,
                         button_label="Download summary CSV",
                     )
-                md_table = summary_df.to_markdown(index=False)
+                md_table = descriptive_summary_table_to_markdown(summary_df, decimals=3)
                 latex_table = descriptive_summary_table_to_latex(summary_df, decimals=3)
                 with dl_col_b:
                     text_download(
@@ -518,11 +519,11 @@ def main():
                         mime="text/plain",
                     )
                 with st.expander("Copy-ready formats"):
-                    st.caption("Use Markdown for docs and scientific LaTeX (vertical metric layout with horizontal rules).")
+                    st.caption("Markdown and LaTeX both use a vertical metric layout for easier manuscript copy/paste.")
                     st.text_area(
                         "Markdown table",
                         value=md_table,
-                        height=180,
+                        height=260,
                         key="stats_summary_markdown_text",
                     )
                     st.text_area(
@@ -1276,6 +1277,26 @@ def main():
                 value=True,
                 help="Embeddings are numeric versions of your text. Reuse to save time if text and model are unchanged.",
             )
+            text_feature_mode = "average"
+            if len(text_cols) > 1:
+                text_feature_mode_options = {
+                    "Average selected text columns per row": "average",
+                    "Run separate models per text column": "separate",
+                }
+                _field_label(
+                    "How to use multiple text columns",
+                    "Average = mean-pool embeddings across selected text columns for each row. Separate = run one independent model set per text column.",
+                )
+                text_feature_mode_label = st.selectbox(
+                    "How to use multiple text columns",
+                    list(text_feature_mode_options.keys()),
+                    index=0,
+                    key="modeling_text_feature_mode",
+                    label_visibility="collapsed",
+                )
+                text_feature_mode = text_feature_mode_options[text_feature_mode_label]
+            elif len(text_cols) == 1:
+                st.caption("One text column selected, so modeling uses that column directly.")
 
             st.markdown("**3. Models**")
             show_classifier = (not unique_tasks) or ("classification" in unique_tasks)
@@ -1347,6 +1368,8 @@ def main():
 
         with right_col:
             st.markdown("**4. Evaluation**")
+            run_permutation = True
+
             _field_label(
                 "CV folds",
                 "How many train/test splits to average over. Higher is more stable but slower.",
@@ -1359,18 +1382,20 @@ def main():
                 step=1,
                 label_visibility="collapsed",
             )
-            _field_label(
-                "Permutation iterations",
-                "Times to shuffle the target to estimate chance performance. Higher is more reliable but slower.",
-            )
-            n_perm = st.number_input(
-                "Permutation iterations",
-                min_value=50,
-                max_value=2000,
-                value=500,
-                step=50,
-                label_visibility="collapsed",
-            )
+            n_perm = 500
+            if run_permutation:
+                _field_label(
+                    "Permutation iterations",
+                    "Times to shuffle the target to estimate chance performance. Higher is more reliable but slower.",
+                )
+                n_perm = st.number_input(
+                    "Permutation iterations",
+                    min_value=50,
+                    max_value=2000,
+                    value=500,
+                    step=50,
+                    label_visibility="collapsed",
+                )
             if target_cols and len(unique_tasks) > 1:
                 st.caption("Mixed target types detected; showing both classification and regression metrics.")
 
@@ -1384,23 +1409,44 @@ def main():
                 default=["accuracy"] if "accuracy" in metric_options else (metric_options[:1] if metric_options else []),
                 label_visibility="collapsed",
             )
-            _field_label(
-                "Multiple comparisons correction",
-                "Adjust p-values when testing multiple targets.",
-            )
-            correction_options = {
-                "FDR (Benjamini–Hochberg)": "fdr_bh",
-                "Bonferroni": "bonferroni",
-                "Holm": "holm",
-                "None": None,
-            }
-            correction_choice = st.selectbox(
-                "Multiple comparisons correction",
-                list(correction_options.keys()),
-                index=0,
-                label_visibility="collapsed",
-            )
-            correction_method = correction_options[correction_choice]
+            correction_choice = "None"
+            correction_method = None
+            correction_scope = "all_tests"
+            if run_permutation:
+                _field_label(
+                    "Multiple comparisons correction",
+                    "Adjust p-values when testing multiple targets and/or multiple feature sets.",
+                )
+                correction_options = {
+                    "FDR (Benjamini–Hochberg)": "fdr_bh",
+                    "Bonferroni": "bonferroni",
+                    "Holm": "holm",
+                    "None": None,
+                }
+                correction_choice = st.selectbox(
+                    "Multiple comparisons correction",
+                    list(correction_options.keys()),
+                    index=0,
+                    label_visibility="collapsed",
+                )
+                correction_method = correction_options[correction_choice]
+                if text_feature_mode == "separate" and len(text_cols) > 1 and len(target_cols) > 1:
+                    correction_scope_options = {
+                        "Across all tests (targets x feature sets)": "all_tests",
+                        "Within each target across feature sets": "within_target",
+                        "Within each feature set across targets": "within_feature_set",
+                    }
+                    _field_label(
+                        "Correction scope",
+                        "Choose which family of hypothesis tests should be corrected together when separate feature sets are modeled.",
+                    )
+                    correction_scope_label = st.selectbox(
+                        "Correction scope",
+                        list(correction_scope_options.keys()),
+                        index=0,
+                        label_visibility="collapsed",
+                    )
+                    correction_scope = correction_scope_options[correction_scope_label]
 
             tune_hyperparams = False
             k_best = 0
@@ -1586,10 +1632,12 @@ def main():
             "cv_folds": int(cv_folds),
             "n_perm": int(n_perm),
             "text_cols": tuple(text_cols),
+            "text_feature_mode": text_feature_mode,
             "reuse_embed": bool(reuse_embed),
             "model_name_modeling": model_name_modeling,
             "report_metrics": tuple(report_metrics),
             "correction_method": correction_choice,
+            "correction_scope": correction_scope,
             "classifier_model_name": classifier_model_name,
             "regressor_model_name": regressor_model_name,
             "classifier_param_grid": classifier_param_grid,
@@ -1638,13 +1686,32 @@ def main():
                 style_container = st.container()
 
             with style_container:
-                plot_cols = st.selectbox("Grid columns", [1, 2, 3], index=1)
-                show_titles = st.checkbox("Show subplot titles", value=True)
-                show_legend = st.checkbox("Show legend", value=False)
-                show_observed = st.checkbox("Show observed score line", value=True)
-                nbins = st.slider("Histogram bins", min_value=10, max_value=80, value=30, step=5)
-                bar_opacity = st.slider("Bar opacity", min_value=0.2, max_value=1.0, value=0.8, step=0.05)
-                color_mode = st.selectbox("Bar color mode", ["Palette", "Single color"], index=0)
+                plot_cols = st.selectbox("Grid columns", [1, 2, 3], index=1, key="perm_plot_cols")
+                show_titles = st.checkbox("Show subplot titles", value=True, key="perm_show_titles")
+                show_legend = st.checkbox("Show legend", value=False, key="perm_show_legend")
+                show_observed = st.checkbox("Show observed score line", value=True, key="perm_show_observed")
+                nbins = st.slider(
+                    "Histogram bins",
+                    min_value=10,
+                    max_value=80,
+                    value=30,
+                    step=5,
+                    key="perm_nbins",
+                )
+                bar_opacity = st.slider(
+                    "Bar opacity",
+                    min_value=0.2,
+                    max_value=1.0,
+                    value=0.8,
+                    step=0.05,
+                    key="perm_bar_opacity",
+                )
+                color_mode = st.selectbox(
+                    "Bar color mode",
+                    ["Palette", "Single color"],
+                    index=0,
+                    key="perm_color_mode",
+                )
 
                 palette_options = {
                     "Plotly": px.colors.qualitative.Plotly,
@@ -1654,23 +1721,47 @@ def main():
                     "Pastel1": px.colors.qualitative.Pastel1,
                 }
                 if color_mode == "Single color":
-                    bar_color = st.color_picker("Bar color", "#4c78a8")
+                    bar_color = st.color_picker("Bar color", "#4c78a8", key="perm_bar_color")
                     palette = None
                 else:
-                    palette_choice = st.selectbox("Palette", list(palette_options.keys()), index=0)
+                    palette_choice = st.selectbox(
+                        "Palette",
+                        list(palette_options.keys()),
+                        index=0,
+                        key="perm_palette_choice",
+                    )
                     palette = palette_options[palette_choice]
                     bar_color = None
 
-                line_color = st.color_picker("Observed line color", "#d62728")
-                line_width = st.slider("Observed line width", min_value=1, max_value=6, value=2, step=1)
-                height_per_row = st.slider("Height per row (px)", min_value=240, max_value=700, value=320, step=20)
-                x_axis_label = st.text_input("X-axis label", "Score")
-                y_axis_label = st.text_input("Y-axis label", "Count")
-                figure_title = st.text_input("Figure title (optional)", "")
+                line_color = st.color_picker(
+                    "Observed line color",
+                    "#d62728",
+                    key="perm_observed_line_color",
+                )
+                line_width = st.slider(
+                    "Observed line width",
+                    min_value=1,
+                    max_value=6,
+                    value=2,
+                    step=1,
+                    key="perm_observed_line_width",
+                )
+                height_per_row = st.slider(
+                    "Height per row (px)",
+                    min_value=240,
+                    max_value=700,
+                    value=320,
+                    step=20,
+                    key="perm_height_per_row",
+                )
+                x_axis_label = st.text_input("X-axis label", "Score", key="perm_x_axis_label")
+                y_axis_label = st.text_input("Y-axis label", "Count", key="perm_y_axis_label")
+                figure_title = st.text_input("Figure title (optional)", "", key="perm_figure_title")
                 figure_title_align = st.selectbox(
                     "Figure title alignment",
                     ["Center", "Left"],
                     index=0,
+                    key="perm_figure_title_align",
                 )
 
                 target_label_map: dict[str, str] = {}
@@ -1689,6 +1780,7 @@ def main():
                     "Customize each histogram (labels and colors)",
                     value=False,
                     disabled=not style_targets,
+                    key="perm_per_target_custom",
                 )
                 if not style_targets:
                     st.caption("Run modeling (or select targets) to enable per-target overrides.")
@@ -1736,7 +1828,12 @@ def main():
                     "Presentation": "presentation",
                     "Default (Plotly)": None,
                 }
-                theme_choice = st.selectbox("Plot theme", list(theme_options.keys()), index=0)
+                theme_choice = st.selectbox(
+                    "Plot theme",
+                    list(theme_options.keys()),
+                    index=0,
+                    key="perm_plot_theme",
+                )
                 theme_value = theme_options[theme_choice]
 
         perm_plot_style = {
@@ -1774,12 +1871,18 @@ def main():
             except Exception:
                 pass
             display_df = results_df.copy()
+            display_df = display_df.drop(
+                columns=["cv_scores", "perm_scores", "target_name"],
+                errors="ignore",
+            )
             if "p_adjusted" in display_df.columns or (
                 "p_adjust_method" in display_df.columns and display_df["p_adjust_method"].notna().any()
             ):
                 display_df = display_df.drop(columns=["p_fdr"], errors="ignore")
             if "p_adjust_method" in display_df.columns and display_df["p_adjust_method"].isna().all():
                 display_df = display_df.drop(columns=["p_adjust_method"])
+            if "p_adjust_scope" in display_df.columns and display_df["p_adjust_scope"].isna().all():
+                display_df = display_df.drop(columns=["p_adjust_scope"])
             st.write("Results")
             st.dataframe(display_df, width='stretch')
             df_to_csv_download(results_df, "model_results.csv")
@@ -1812,6 +1915,10 @@ def main():
                     tgt = row.get("target", "target")
                     perm_scores = row.get("perm_scores", [])
                     observed = float(row.get("observed", 0.0))
+                    if isinstance(perm_scores, tuple):
+                        perm_scores = list(perm_scores)
+                    elif isinstance(perm_scores, np.ndarray):
+                        perm_scores = perm_scores.tolist()
                     if isinstance(perm_scores, list) and len(perm_scores):
                         perm_rows.append((tgt, perm_scores, observed))
 
@@ -1821,19 +1928,6 @@ def main():
                     target_line_colors = style.get("target_line_colors") or {}
 
                     def _target_label(target_name) -> str:
-                        """
-                        Resolve display label for a target using style overrides.
-
-                        Parameters
-                        ----------
-                        target_name
-                            Raw target identifier.
-
-                        Returns
-                        -------
-                        str
-                            Label to show in subplot title and legend.
-                        """
                         key = str(target_name)
                         val = target_label_map.get(key)
                         if isinstance(val, str) and val.strip():
@@ -1954,17 +2048,16 @@ def main():
                             normalize=True
                         )
                     X = pd.DataFrame(emb, index=pd.MultiIndex.from_frame(meta_df[["source_column", "index"]]))
-                    X_by_row = X.groupby(level=1).mean()
                     Y = df[target_cols]
                     group_series = df[group_col] if group_col else None
 
                     classifier_model = classifier_model_options[classifier_model_name][0] if classifier_model_name else None
                     regressor_model = regression_model_options[regressor_model_name][0] if regressor_model_name else None
-                    model_kwargs = {
-                        "X": X_by_row,
+                    model_kwargs_base = {
                         "Y": Y,
                         "cv": int(cv_folds),
                         "n_permutations": int(n_perm),
+                        "run_permutation": bool(run_permutation),
                         "random_state": 42,
                         "max_unique_for_class": int(max_unique_for_class),
                         "scale_X": True,
@@ -1998,10 +2091,62 @@ def main():
                         "target_task_overrides": target_task_overrides,
                     }
                     supported_params = set(inspect.signature(auto_cv_with_permutation).parameters)
-                    filtered_model_kwargs = {
-                        k: v for k, v in model_kwargs.items() if k in supported_params
-                    }
-                    results_df, preds = auto_cv_with_permutation(**filtered_model_kwargs)
+                    if text_feature_mode == "separate" and len(text_cols) > 1:
+                        results_parts = []
+                        preds = {}
+                        available_sources = set(meta_df["source_column"].astype(str).tolist())
+                        for source in text_cols:
+                            source_name = str(source)
+                            if source_name not in available_sources:
+                                continue
+                            try:
+                                X_source = X.xs(source_name, level=0, drop_level=True)
+                            except KeyError:
+                                continue
+                            model_kwargs = {
+                                "X": X_source,
+                                **model_kwargs_base,
+                                "correction_method": None,
+                            }
+                            filtered_model_kwargs = {
+                                k: v for k, v in model_kwargs.items() if k in supported_params
+                            }
+                            source_results_df, source_preds = auto_cv_with_permutation(**filtered_model_kwargs)
+                            if len(source_results_df):
+                                source_results_df = source_results_df.copy()
+                                source_results_df["feature_set"] = source_name
+                                source_results_df["target_name"] = source_results_df["target"].astype(str)
+                                source_results_df["target"] = source_results_df["target"].map(
+                                    lambda target_name: f"{source_name} :: {target_name}"
+                                )
+                                results_parts.append(source_results_df)
+                            for target_name, pred_vals in source_preds.items():
+                                preds[f"{source_name} :: {target_name}"] = pred_vals
+                        if results_parts:
+                            results_df = pd.concat(results_parts, ignore_index=True, sort=False)
+                            correction_group_cols = None
+                            if correction_scope == "within_target":
+                                correction_group_cols = ["target_name"]
+                            elif correction_scope == "within_feature_set":
+                                correction_group_cols = ["feature_set"]
+                            results_df = apply_multiple_comparisons_correction(
+                                results_df,
+                                correction_method=correction_method,
+                                group_cols=correction_group_cols,
+                                scope_label=correction_scope,
+                            )
+                        else:
+                            results_df = pd.DataFrame()
+                    else:
+                        X_by_row = X.groupby(level=1).mean()
+                        model_kwargs = {
+                            "X": X_by_row,
+                            **model_kwargs_base,
+                        }
+                        filtered_model_kwargs = {
+                            k: v for k, v in model_kwargs.items() if k in supported_params
+                        }
+                        results_df, preds = auto_cv_with_permutation(**filtered_model_kwargs)
 
                     st.session_state["results_df"] = results_df
                     st.session_state["preds"] = preds

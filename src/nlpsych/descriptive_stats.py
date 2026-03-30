@@ -8,6 +8,48 @@ from nlpsych.utils import get_spacy_pipeline_base
 
 # ===== Section: Core text stats =====
 SplitOverall = Literal["combined", "per_column", "both"]
+SUMMARY_METRIC_GROUPS = [
+    (
+        "Corpus Size",
+        [
+            "N Texts",
+            "Total Characters",
+            "Total Words",
+            "Total Sentences",
+            "Total Unique Words",
+        ],
+    ),
+    (
+        "Per-Text Counts",
+        [
+            "Mean Characters / Text",
+            "SD Characters / Text",
+            "Mean Words / Text",
+            "SD Words / Text",
+            "Mean Sentences / Text",
+            "SD Sentences / Text",
+            "Mean Unique Words / Text",
+            "SD Unique Words / Text",
+        ],
+    ),
+    (
+        "Lexical Richness",
+        [
+            "Lexical Diversity (TTR)",
+            "Mean Lexical Diversity (TTR) / Text",
+            "SD Lexical Diversity (TTR) / Text",
+        ],
+    ),
+    (
+        "Length Metrics",
+        [
+            "Mean Sentence Length",
+            "SD Sentence Length",
+            "Mean Word Length",
+            "SD Word Length",
+        ],
+    ),
+]
 
 
 def _split_overall_payload(
@@ -82,14 +124,22 @@ def build_descriptive_summary_table(
         "Total Characters",
         "Total Words",
         "Total Sentences",
+        "Total Unique Words",
+        "Mean Characters / Text",
+        "SD Characters / Text",
         "Mean Words / Text",
         "SD Words / Text",
+        "Mean Sentences / Text",
+        "SD Sentences / Text",
+        "Mean Unique Words / Text",
+        "SD Unique Words / Text",
+        "Lexical Diversity (TTR)",
+        "Mean Lexical Diversity (TTR) / Text",
+        "SD Lexical Diversity (TTR) / Text",
         "Mean Sentence Length",
         "SD Sentence Length",
         "Mean Word Length",
         "SD Word Length",
-        "Total Unique Words",
-        "Lexical Diversity (TTR)",
     ]
     if not isinstance(stats_df, pd.DataFrame) or stats_df.empty:
         return pd.DataFrame(columns=columns)
@@ -180,8 +230,18 @@ def build_descriptive_summary_table(
             "Total Characters": total_chars,
             "Total Words": total_words,
             "Total Sentences": total_sentences,
+            "Total Unique Words": total_unique_words,
+            "Lexical Diversity (TTR)": lexical_diversity,
+            "Mean Characters / Text": float(sub_df["char_count"].mean()),
+            "SD Characters / Text": float(sub_df["char_count"].std(ddof=1)) if len(sub_df) > 1 else 0.0,
             "Mean Words / Text": float(sub_df["word_count"].mean()),
             "SD Words / Text": float(sub_df["word_count"].std(ddof=1)) if len(sub_df) > 1 else 0.0,
+            "Mean Sentences / Text": float(sub_df["sentence_count"].mean()),
+            "SD Sentences / Text": float(sub_df["sentence_count"].std(ddof=1)) if len(sub_df) > 1 else 0.0,
+            "Mean Unique Words / Text": float(sub_df["unique_words"].mean()),
+            "SD Unique Words / Text": float(sub_df["unique_words"].std(ddof=1)) if len(sub_df) > 1 else 0.0,
+            "Mean Lexical Diversity (TTR) / Text": float(sub_df["lexical_diversity"].mean()),
+            "SD Lexical Diversity (TTR) / Text": float(sub_df["lexical_diversity"].std(ddof=1)) if len(sub_df) > 1 else 0.0,
             "Mean Sentence Length": _float_or_nan(overall_stats.get("avg_sentence_length"))
             if "avg_sentence_length" in overall_stats
             else float(sub_df["avg_sentence_length"].mean()),
@@ -190,8 +250,6 @@ def build_descriptive_summary_table(
             if "avg_word_length" in overall_stats
             else float(sub_df["avg_word_length"].mean()),
             "SD Word Length": float(sub_df["avg_word_length"].std(ddof=1)) if len(sub_df) > 1 else 0.0,
-            "Total Unique Words": total_unique_words,
-            "Lexical Diversity (TTR)": lexical_diversity,
         }
 
     source_col_count = 1
@@ -232,7 +290,169 @@ def build_descriptive_summary_table(
     order = np.where(summary_df["Corpus"].astype(str).eq("Combined"), 0, 1)
     summary_df["_order"] = order
     summary_df = summary_df.sort_values(["_order", "Corpus"], kind="stable").drop(columns=["_order"]).reset_index(drop=True)
+    if source_col_count == 1 and summary_df["Corpus"].nunique(dropna=False) == 1:
+        summary_df = summary_df.drop(columns=["Corpus"])
     return summary_df
+
+
+def _format_summary_table_value(value: Any, decimals: int = 3) -> str:
+    """
+    Format a summary-table value for text-based exports.
+
+    Parameters
+    ----------
+    value : Any
+        Raw value from the summary DataFrame.
+    decimals : int, default=3
+        Decimal precision used for floating-point values.
+
+    Returns
+    -------
+    str
+        String representation with grouped integers and fixed float precision.
+    """
+    if pd.isna(value):
+        return ""
+    if isinstance(value, (int, np.integer)):
+        return f"{int(value):,}"
+    if isinstance(value, (float, np.floating)):
+        return f"{float(value):.{int(decimals)}f}"
+    return str(value)
+
+
+def _summary_metric_groups(summary_df: pd.DataFrame) -> list[tuple[str, list[str]]]:
+    """
+    Order summary metrics into manuscript-friendly groups.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Output from ``build_descriptive_summary_table``.
+
+    Returns
+    -------
+    list[tuple[str, list[str]]]
+        Metric-group definitions filtered to the columns present in
+        ``summary_df`` while preserving a stable, grouped order.
+    """
+    if not isinstance(summary_df, pd.DataFrame):
+        return []
+
+    available_metrics = [c for c in summary_df.columns if c != "Corpus"]
+    available_set = set(available_metrics)
+    grouped: list[tuple[str, list[str]]] = []
+    used: set[str] = set()
+
+    for group_name, metrics in SUMMARY_METRIC_GROUPS:
+        present_metrics = [metric for metric in metrics if metric in available_set]
+        if present_metrics:
+            grouped.append((group_name, present_metrics))
+            used.update(present_metrics)
+
+    remaining = [metric for metric in available_metrics if metric not in used]
+    if remaining:
+        grouped.append(("Other", remaining))
+
+    return grouped
+
+
+def _escape_latex(text: str) -> str:
+    """
+    Escape a plain-text string for safe inclusion in LaTeX tables.
+
+    Parameters
+    ----------
+    text : str
+        Raw cell text.
+
+    Returns
+    -------
+    str
+        LaTeX-escaped text.
+    """
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+    }
+    return "".join(replacements.get(char, char) for char in str(text))
+
+
+def _build_vertical_summary_table(
+    summary_df: pd.DataFrame,
+    decimals: int = 3,
+) -> pd.DataFrame:
+    """
+    Convert a wide summary table into a vertical metric/value layout.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Output from ``build_descriptive_summary_table``.
+    decimals : int, default=3
+        Decimal precision used for floating-point values.
+
+    Returns
+    -------
+    pd.DataFrame
+        Vertical summary table with ``Metric``/``Value`` columns and an
+        optional ``Corpus`` column when more than one source is shown.
+    """
+    has_corpus = isinstance(summary_df, pd.DataFrame) and "Corpus" in summary_df.columns
+    vertical_columns = ["Metric", "Value"]
+    if has_corpus:
+        vertical_columns = ["Corpus", *vertical_columns]
+
+    if not isinstance(summary_df, pd.DataFrame) or summary_df.empty:
+        return pd.DataFrame(columns=vertical_columns)
+
+    metric_columns = [
+        metric
+        for _, metrics in _summary_metric_groups(summary_df)
+        for metric in metrics
+    ]
+    rows = []
+    for _, row in summary_df.iterrows():
+        for metric in metric_columns:
+            out_row = {
+                "Metric": str(metric),
+                "Value": _format_summary_table_value(row.get(metric), decimals=decimals),
+            }
+            if has_corpus:
+                out_row["Corpus"] = str(row.get("Corpus", ""))
+            rows.append(out_row)
+
+    return pd.DataFrame(rows, columns=vertical_columns)
+
+
+def descriptive_summary_table_to_markdown(
+    summary_df: pd.DataFrame,
+    decimals: int = 3,
+) -> str:
+    """
+    Convert a summary table to a vertical, manuscript-friendly Markdown table.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Output from ``build_descriptive_summary_table``.
+    decimals : int, default=3
+        Decimal precision used for floating-point values.
+
+    Returns
+    -------
+    str
+        Markdown table in long/vertical metric layout.
+    """
+    vertical_df = _build_vertical_summary_table(summary_df, decimals=decimals)
+    return vertical_df.to_markdown(index=False)
 
 
 def descriptive_summary_table_to_latex(
@@ -252,56 +472,47 @@ def descriptive_summary_table_to_latex(
     Returns
     -------
     str
-        LaTeX ``tabular`` string using booktabs-style horizontal rules with no
-        vertical separators, in long/vertical metric layout.
+        LaTeX ``tabular`` string using plain horizontal rules and grouped
+        long/vertical metric sections for broad compatibility.
     """
-    latex_columns = ["Corpus", "Metric", "Value"]
+    has_corpus = isinstance(summary_df, pd.DataFrame) and "Corpus" in summary_df.columns
+    columns = ["Metric", "Value"]
+    if has_corpus:
+        columns = ["Corpus", *columns]
+
+    metric_groups = _summary_metric_groups(summary_df)
+    column_format = "l" * len(columns)
+    lines = [
+        rf"\begin{{tabular}}{{{column_format}}}",
+        r"\hline",
+        " & ".join(_escape_latex(col) for col in columns) + r" \\",
+        r"\hline",
+    ]
+
     if not isinstance(summary_df, pd.DataFrame) or summary_df.empty:
-        empty = pd.DataFrame(columns=latex_columns)
-        return empty.to_latex(index=False, escape=True, column_format="lll")
+        lines.extend([r"\hline", r"\end{tabular}"])
+        return "\n".join(lines)
 
-    metric_columns = [c for c in summary_df.columns if c != "Corpus"]
-    rows = []
+    for row_idx, (_, row) in enumerate(summary_df.iterrows()):
+        if row_idx > 0:
+            lines.append(r"\hline")
+        for group_idx, (_, metrics) in enumerate(metric_groups):
+            if group_idx > 0:
+                lines.append(r"\hline")
+            for metric in metrics:
+                value_text = _escape_latex(
+                    _format_summary_table_value(row.get(metric), decimals=decimals)
+                )
+                if has_corpus:
+                    corpus = _escape_latex(str(row.get("Corpus", "")))
+                    metric_text = _escape_latex(str(metric))
+                    lines.append(f"{corpus} & {metric_text} & {value_text} " + r"\\")
+                else:
+                    metric_text = _escape_latex(str(metric))
+                    lines.append(f"{metric_text} & {value_text} " + r"\\")
 
-    def _format_value_for_latex(value: Any) -> str:
-        """
-        Format a table cell value for manuscript-ready LaTeX output.
-
-        Parameters
-        ----------
-        value : Any
-            Raw value from the summary DataFrame.
-
-        Returns
-        -------
-        str
-            Rendered value string with integer grouping and fixed float precision.
-        """
-        if pd.isna(value):
-            return ""
-        if isinstance(value, (int, np.integer)):
-            return f"{int(value):,}"
-        if isinstance(value, (float, np.floating)):
-            return f"{float(value):.{int(decimals)}f}"
-        return str(value)
-
-    for _, row in summary_df.iterrows():
-        corpus = str(row.get("Corpus", ""))
-        for metric in metric_columns:
-            rows.append(
-                {
-                    "Corpus": corpus,
-                    "Metric": str(metric),
-                    "Value": _format_value_for_latex(row.get(metric)),
-                }
-            )
-
-    latex_df = pd.DataFrame(rows, columns=latex_columns)
-    return latex_df.to_latex(
-        index=False,
-        escape=True,
-        column_format="lll",
-    )
+    lines.extend([r"\hline", r"\end{tabular}"])
+    return "\n".join(lines)
 
 def descriptive_stats(
     *series_list: Iterable[pd.Series],

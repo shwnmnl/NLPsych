@@ -12,6 +12,7 @@ from .utils import get_spacy_pipeline_base, get_st_model_base
 from .descriptive_stats import (
     descriptive_stats,
     build_descriptive_summary_table,
+    descriptive_summary_table_to_markdown,
     descriptive_summary_table_to_latex,
 )
 from .embedding import (
@@ -20,7 +21,7 @@ from .embedding import (
     build_plot_df,
     plot_projection,
 )
-from .modeling import auto_cv_with_permutation
+from .modeling import auto_cv_with_permutation, apply_multiple_comparisons_correction
 from .report import build_report_payload
 
 __all__ = [
@@ -28,11 +29,13 @@ __all__ = [
     "get_st_model_base",
     "descriptive_stats",
     "build_descriptive_summary_table",
+    "descriptive_summary_table_to_markdown",
     "descriptive_summary_table_to_latex",
     "embed_text_columns_simple",
     "reduce_embeddings",
     "build_plot_df",
     "plot_projection",
     "auto_cv_with_permutation",
+    "apply_multiple_comparisons_correction",
     "build_report_payload",
 ]

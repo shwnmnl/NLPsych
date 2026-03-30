@@ -624,7 +624,6 @@ def _perm_test(
         p = (1.0 + np.sum(np.asarray(perm_scores) <= observed)) / (n_perm + 1.0)
     return perm_scores, float(p)
 
-
 def _normalize_correction_method(method: Optional[str]) -> Optional[str]:
     """
     Normalize multiple-comparisons correction method input.
@@ -647,11 +646,100 @@ def _normalize_correction_method(method: Optional[str]) -> Optional[str]:
     return m
 
 
+def apply_multiple_comparisons_correction(
+    results_df: pd.DataFrame,
+    correction_method: Optional[str] = "fdr_bh",
+    group_cols: Optional[List[str]] = None,
+    scope_label: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Apply multiple-comparisons correction to a modeling results table.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        Modeling results containing at least a ``p_value`` column.
+    correction_method : Optional[str], default="fdr_bh"
+        Method passed to ``statsmodels.stats.multitest.multipletests``.
+        Use None or "none" to disable adjustment.
+    group_cols : Optional[List[str]], default=None
+        Optional columns defining independent correction families. When None,
+        all rows belong to one family.
+    scope_label : Optional[str], default=None
+        Optional label stored in ``p_adjust_scope`` for downstream display.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of ``results_df`` with adjusted-p columns updated.
+    """
+    if not isinstance(results_df, pd.DataFrame):
+        return results_df
+
+    corrected = results_df.copy()
+    if corrected.empty or "p_value" not in corrected.columns:
+        return corrected
+
+    adjust_method = _normalize_correction_method(correction_method)
+    corrected["p_adjusted"] = np.nan
+    corrected["p_adjust_method"] = None
+    corrected["p_fdr"] = np.nan
+    if scope_label is not None:
+        corrected["p_adjust_scope"] = str(scope_label)
+
+    if adjust_method is None:
+        corrected = corrected.drop(columns=["p_adjust_scope"], errors="ignore")
+        for col in ("p_adjusted", "p_adjust_method", "p_fdr", "p_adjust_scope"):
+            if col in corrected.columns and corrected[col].isna().all():
+                corrected = corrected.drop(columns=[col])
+        return corrected
+
+    valid_group_cols = [col for col in (group_cols or []) if col in corrected.columns]
+
+    try:
+        multipletests([0.5], method=adjust_method)
+    except Exception:
+        warnings.warn(
+            f"Unknown correction method '{correction_method}'. Skipping adjustment.",
+            RuntimeWarning,
+        )
+        corrected = corrected.drop(columns=["p_adjust_scope"], errors="ignore")
+        for col in ("p_adjusted", "p_adjust_method", "p_fdr", "p_adjust_scope"):
+            if col in corrected.columns and corrected[col].isna().all():
+                corrected = corrected.drop(columns=[col])
+        return corrected
+
+    if valid_group_cols:
+        grouped_index_sets = [
+            group_idx.tolist()
+            for _, group_idx in corrected.groupby(valid_group_cols, sort=False, dropna=False).groups.items()
+        ]
+    else:
+        grouped_index_sets = [corrected.index.tolist()]
+
+    for group_idx in grouped_index_sets:
+        pvals = pd.to_numeric(corrected.loc[group_idx, "p_value"], errors="coerce")
+        valid_idx = pvals[pvals.notna()].index
+        if not len(valid_idx):
+            continue
+        _, p_adj, _, _ = multipletests(pvals.loc[valid_idx].to_numpy(), method=adjust_method)
+        corrected.loc[valid_idx, "p_adjusted"] = p_adj
+        corrected.loc[valid_idx, "p_adjust_method"] = adjust_method
+        if adjust_method == "fdr_bh":
+            corrected.loc[valid_idx, "p_fdr"] = p_adj
+
+    for col in ("p_adjusted", "p_adjust_method", "p_fdr", "p_adjust_scope"):
+        if col in corrected.columns and corrected[col].isna().all():
+            corrected = corrected.drop(columns=[col])
+    return corrected
+
+
 def auto_cv_with_permutation(
     X: pd.DataFrame,
     Y: pd.DataFrame,
     cv: int = 5,
     n_permutations: int = 200,
+    run_permutation: bool = True,
     random_state: int = 42,
     max_unique_for_class: int = 20,
     classifier_model=None,
@@ -677,7 +765,7 @@ def auto_cv_with_permutation(
     target_task_overrides: Optional[Dict[str, str]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, np.ndarray]]:
     """
-    Cross-validated evaluation with a permutation test for one or more targets.
+    Cross-validated evaluation with optional permutation inference.
 
     Parameters
     ----------
@@ -689,6 +777,8 @@ def auto_cv_with_permutation(
         Desired number of folds. May be reduced automatically for small n or class counts.
     n_permutations : int
         Number of label permutations for the permutation test.
+    run_permutation : bool
+        If True, compute permutation-test null distributions and p-values.
     random_state : int
         Seed for reproducibility (CV shuffling and permutations).
     max_unique_for_class : int
@@ -742,7 +832,8 @@ def auto_cv_with_permutation(
     Returns
     -------
     results_df : DataFrame
-        One row per target with observed CV score, permutation p-value, FDR correction, and CV metadata.
+        One row per target with observed CV score, optional permutation p-value,
+        and CV metadata.
     cv_preds : Dict[str, np.ndarray]
         Cross-validated out-of-fold predictions per target (aligned to the samples used for that target).
     """
@@ -944,23 +1035,26 @@ def auto_cv_with_permutation(
                 if name in metric_funcs:
                     extra_metrics[f"metric_{name}"] = float(metric_funcs[name](y, preds))
 
-        try:
-            perm_scores, p_val = _perm_test(
-                X_sub,
-                y,
-                task,
-                base_estimator,
-                cv_splits,
-                scorer,
-                observed,
-                int(n_permutations),
-                larger_is_better,
-                rng,
-                groups=group_vals,
-            )
-        except ValueError as exc:
-            warnings.warn(f"Skipping {target}: {exc}", RuntimeWarning)
-            continue
+        perm_scores: List[float] = []
+        p_val = float("nan")
+        if bool(run_permutation):
+            try:
+                perm_scores, p_val = _perm_test(
+                    X_sub,
+                    y,
+                    task,
+                    base_estimator,
+                    cv_splits,
+                    scorer,
+                    observed,
+                    int(n_permutations),
+                    larger_is_better,
+                    rng,
+                    groups=group_vals,
+                )
+            except ValueError as exc:
+                warnings.warn(f"Skipping {target}: {exc}", RuntimeWarning)
+                continue
 
         results.append(TargetResult(
             target=str(target),
@@ -984,30 +1078,6 @@ def auto_cv_with_permutation(
             "cv_scores","perm_scores","cv_folds_used"
         ]), {}
 
-    # Multiple-comparisons correction across targets
-    adjust_method = _normalize_correction_method(correction_method)
-    p_adj = None
-    if adjust_method:
-        try:
-            _, p_adj, _, _ = multipletests([r.p_value for r in results], method=adjust_method)
-        except Exception:
-            warnings.warn(
-                f"Unknown correction method '{correction_method}'. Skipping adjustment.",
-                RuntimeWarning,
-            )
-            adjust_method = None
-
-    if adjust_method and p_adj is not None:
-        for r, adj in zip(results, p_adj):
-            r.p_adjusted = float(adj)
-            r.p_adjust_method = adjust_method
-            if adjust_method == "fdr_bh":
-                r.p_fdr = float(adj)
-    else:
-        for r in results:
-            r.p_adjusted = np.nan
-            r.p_adjust_method = None
-
     if unknown_metrics:
         warnings.warn(
             f"Skipping unsupported metrics: {', '.join(unknown_metrics)}",
@@ -1019,8 +1089,14 @@ def auto_cv_with_permutation(
         row = r.__dict__.copy()
         row.update(extra)
         rows.append(row)
-    results_df = pd.DataFrame(rows)
-    for col in ("p_adjusted", "p_adjust_method", "p_fdr"):
-        if col in results_df.columns and results_df[col].isna().all():
-            results_df = results_df.drop(columns=[col])
+    results_df = apply_multiple_comparisons_correction(
+        pd.DataFrame(rows),
+        correction_method=correction_method if bool(run_permutation) else None,
+        group_cols=None,
+        scope_label="all_tests",
+    )
+    if "p_value" in results_df.columns and pd.to_numeric(results_df["p_value"], errors="coerce").isna().all():
+        results_df = results_df.drop(columns=["p_value"], errors="ignore")
+    if "perm_scores" in results_df.columns and results_df["perm_scores"].apply(lambda v: not isinstance(v, list) or len(v) == 0).all():
+        results_df = results_df.drop(columns=["perm_scores"], errors="ignore")
     return results_df, cv_preds
