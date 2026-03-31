@@ -6,6 +6,9 @@
 
 NLPsych (*Natural Language Psychometrics*) lets you upload a CSV file, pick your text columns, and get instant descriptive statistics, visualize semantic embeddings, and run predictive models all in one streamlined workflow.
 
+> **Warning**
+> `pip install` releases of NLPsych should be treated as unstable for now. If you want to use NLPsych today, prefer running it from source locally. The public demo can also be used for exploration, but it runs on third-party servers, so avoid uploading sensitive data there.
+
 ## ⚙️ Features
 - 📊 Descriptive statistics: word counts, sentence lengths, lexical diversity
 - 🔎 Embeddings: Sentence-Transformers + dimensionality reduction (PCA, UMAP, t-SNE)

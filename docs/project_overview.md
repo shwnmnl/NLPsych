@@ -2,6 +2,9 @@
 
 > Natural Language Psychometrics (NLPsych) is a hybrid Python library + Streamlit app for turning free-text datasets into descriptive statistics, semantic embeddings, lightweight predictive models, and shareable reports.
 
+> **Warning**
+> `pip install` releases of NLPsych should be treated as unstable for now. If you want to use NLPsych today, prefer running it from source locally. The public demo can also be used for exploration, but it runs on third-party servers, so avoid uploading sensitive data there.
+
 ## Table of Contents
 1. [Overview](#overview)
 2. [Orientation: Using Text Embeddings for Statistical Analysis](#orientation-using-text-embeddings-for-statistical-analysis)
