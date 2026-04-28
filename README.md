@@ -12,6 +12,7 @@ NLPsych (*Natural Language Psychometrics*) lets you upload a CSV file, pick your
 ## ⚙️ Features
 - 📊 Descriptive statistics: word counts, sentence lengths, lexical diversity
 - 🔎 Embeddings: Sentence-Transformers + dimensionality reduction (PCA, UMAP, t-SNE)
+- 🧭 Topic discovery: BERTopic with configurable UMAP/PCA + HDBSCAN, topic summaries, and BERTopic topic/document visual diagnostics
 - 🤖 Modeling: auto/forced classification-vs-regression, CV safeguards, and permutation tests
 - 📑 Reports: HTML/Markdown outputs with per-target interpretations and example write-up sentences
 
@@ -23,6 +24,12 @@ To use NLPsych functions in your own Python code:
 
 ```bash
 pip install nlpsych
+```
+
+To add BERTopic-based cluster discovery on top of the library:
+
+```bash
+pip install "nlpsych[topics]"
 ```
 
 Use lowercase in commands and imports (`nlpsych`, `nlpsych_app`).
@@ -50,6 +57,7 @@ For Streamlit Community Cloud, set the main file path to `streamlit_app.py`.
 import pandas as pd
 from nlpsych.descriptive_stats import descriptive_stats
 from nlpsych.embedding import embed_text_columns_simple_base, reduce_embeddings
+from nlpsych.topic_modeling import fit_topic_model, build_topic_assignments
 
 df = pd.DataFrame({"text": [
     "Hello world. This is a tiny test.",
@@ -61,7 +69,26 @@ print(overall["lexical_diversity"])
 
 meta_df, emb, texts = embed_text_columns_simple_base([df["text"]])
 Z = reduce_embeddings(emb, method="pca", n_components=2)
+topic_model, topics, probs = fit_topic_model(
+    texts,
+    emb,
+    cluster_reduce_method="pca",
+    cluster_reduce_n_components=2,
+    hdbscan_min_cluster_size=2,
+    ngram_range=(1, 1),
+)
+topic_assignments = build_topic_assignments(meta_df, texts, topics, probs, topic_model)
 ````
+
+In the app, `Embeddings` owns the document projection, while `Topics / Clusters` owns BERTopic fitting and BERTopic-specific plots. If topics have already been fit, `Embeddings` can optionally match the fitted topic reducer family/settings for a fresh 2D/3D display projection without claiming it is the exact same fitted reducer object.
+
+The `Topics / Clusters` tab can generate BERTopic visualizations on demand:
+- intertopic distance map
+- topic word scores
+- topic similarity heatmap
+- topic hierarchy
+- term score decline
+- document scatter plot
 
 ## 📂 Project structure
 
@@ -80,6 +107,7 @@ root/
 │   │   ├── embedding.py
 │   │   ├── modeling.py
 │   │   ├── report.py
+│   │   ├── topic_modeling.py
 │   │   └── utils.py
 │   ├── nlpsych_app/              
 │   │   ├── assets/    

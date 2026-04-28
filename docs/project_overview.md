@@ -147,7 +147,7 @@ The observed performance can then be compared to this distribution to obtain a p
 ## Feature Highlights
 
 - **Descriptive statistics**: Token/character counts, lexical diversity, POS breakdowns, and customizable averaging modes powered by spaCy.
-- **Embeddings**: Plug-and-play SentenceTransformer encoders (MiniLM, MPNet, multilingual variants, or custom names) plus PCA/UMAP/t-SNE reduction and Plotly visualizations.
+- **Embeddings**: Plug-and-play SentenceTransformer encoders (MiniLM, MPNet, multilingual variants, or custom names) plus PCA/UMAP/t-SNE reduction, Plotly visualizations, and BERTopic-based cluster discovery.
 - **Modeling**: Auto-detection plus explicit task overrides (`task_mode`, `target_task_overrides`), CV/permutation testing, and Benjamini–Hochberg FDR correction via `auto_cv_with_permutation`.
 - **Reports**: `build_report_payload` assembles HTML + Markdown summaries with per-target interpretations and example write-up sentences.
 - **App workflow**: Upload CSV/TSV/XLSX (or use demo data), pick text columns, compute stats, explore embeddings, run models, and export reports without touching code.
@@ -162,6 +162,7 @@ src/
 │   ├── embedding.py
 │   ├── modeling.py
 │   ├── report.py
+│   ├── topic_modeling.py
 │   └── utils.py
 ├── nlpsych_app/      # Streamlit UI built on top of the library
 │   ├── app.py
@@ -183,6 +184,14 @@ pip install nlpsych
 
 This installs the `nlpsych` package with dependencies such as pandas, spaCy 3.8, scikit-learn, statsmodels, SentenceTransformers, UMAP, Plotly, and Tabulate.
 Use lowercase in commands and imports (`nlpsych`, `nlpsych_app`).
+
+### Topic modeling extra
+
+```bash
+pip install "nlpsych[topics]"
+```
+
+The `[topics]` extra adds BERTopic and HDBSCAN so you can discover clusters/topics directly from cached sentence embeddings in Python code.
 
 ### Streamlit app
 
@@ -211,6 +220,7 @@ pip install -e ".[app,dev]"
 import pandas as pd
 from nlpsych.descriptive_stats import descriptive_stats
 from nlpsych.embedding import embed_text_columns_simple, reduce_embeddings, build_plot_df
+from nlpsych.topic_modeling import fit_topic_model, build_topic_assignments
 from nlpsych.modeling import auto_cv_with_permutation
 from nlpsych.report import build_report_payload
 
@@ -227,12 +237,23 @@ meta_df, emb, texts = embed_text_columns_simple([df["note"]])
 Z = reduce_embeddings(emb, method="pca", n_components=2)
 plot_df = build_plot_df(Z, meta_df, texts)
 
-# 3. Modeling (if you have targets)
+# 3. Topic modeling (optional; requires nlpsych[topics])
+topic_model, topics, probs = fit_topic_model(
+    texts,
+    emb,
+    cluster_reduce_method="pca",
+    cluster_reduce_n_components=2,
+    hdbscan_min_cluster_size=2,
+    ngram_range=(1, 1),
+)
+topic_assignments = build_topic_assignments(meta_df, texts, topics, probs, topic_model)
+
+# 4. Modeling (if you have targets)
 X = meta_df.join(pd.DataFrame(emb)).groupby("index").mean()
 Y = pd.DataFrame({"target": [0, 1]})
 results_df, preds = auto_cv_with_permutation(X, Y)
 
-# 4. Report
+# 5. Report
 html_report, md_report = build_report_payload(
     text_cols=["note"],
     stats_df=stats_df,
@@ -250,10 +271,11 @@ html_report, md_report = build_report_payload(
 2. **Tabs workflow**:
    - Overview: dataset summary and selected text columns.
    - Descriptive stats: toggles for alphabetic filtering, stopword removal, lemma-based vocab, and averaging mode; caches spaCy pipeline.
-   - Embeddings: SentenceTransformer selector (preset list + custom option), choice of PCA/UMAP/t-SNE, and 2D/3D plotting with Plotly.
+   - Embeddings: SentenceTransformer selector (preset list + custom option), explicit projection reducer choice (PCA/UMAP/t-SNE), optional matched-topic-reducer display mode, and 2D/3D plotting with Plotly. Topic-derived color overlays appear here after fitting clusters.
+   - Topics / Clusters: BERTopic cluster/topic discovery using the cached embeddings from the Embeddings tab, plus configurable clustering reducer choice (UMAP or PCA), HDBSCAN settings, topic-term refresh controls, and on-demand BERTopic topic/document visualizations.
    - Modeling: pick non-text targets, set CV/permutation controls, choose task mode (auto/classification/regression), optionally override task per target, reuse cached embeddings, and view permutation histograms.
    - Report: combine previous outputs into HTML or Markdown, ready for download.
-3. **Downloads**: CSVs for per-row stats, projection coordinates, embeddings (with metadata), modeling tables, plus `.npy` arrays and HTML/Markdown reports.
+3. **Downloads**: CSVs for per-row stats, projection coordinates, embeddings (with metadata), topic assignments, topic summaries, modeling tables, plus `.npy` arrays and HTML/Markdown reports.
 
 State is cached via `st.session_state` and Streamlit caching decorators to decouple heavy computations from UI interactions.
 
@@ -277,6 +299,15 @@ Outputs:
 | `reduce_embeddings(embeddings, method, n_components, metric)` | Wrapper over PCA/UMAP/t-SNE with sane defaults (e.g., auto-adjusted t-SNE perplexity, UMAP fallback). |
 | `build_plot_df(Z, meta, texts)` | Combines reduced coordinates with metadata for plotting/export. |
 | `plot_projection(plot_df, n_components, color_by, point_size)` | Generates Plotly 2D or 3D scatter plots for Streamlit and notebooks. |
+
+### `nlpsych.topic_modeling`
+
+| Function | Purpose |
+| --- | --- |
+| `fit_topic_model(texts, embeddings, ...)` | Fits BERTopic with configurable clustering reducers (`UMAP` or `PCA`) plus HDBSCAN using precomputed sentence embeddings. |
+| `build_topic_assignments(meta_df, texts, topics, probs, topic_model)` | Returns one row per text with topic ids, labels, probabilities, and outlier flags. |
+| `summarize_topics(topic_model, assignments_df, representative_docs)` | Produces a compact per-topic table with counts, shares, top terms, and representative documents. |
+| `build_topic_plot(topic_model, plot_type, ...)` | Thin validation wrapper over BERTopic’s topic-level and document-level plots, including BERTopic’s document scatter view. |
 
 ### `nlpsych.modeling`
 
@@ -313,8 +344,9 @@ Key helpers: `_fit_and_score_cv`, `_perm_test`, and the `TargetResult` dataclass
 1. **Ingest**: CSV columns are selected as `series_list`.
 2. **Descriptive stats**: `descriptive_stats` yields per-row + overall aggregates; cached in `st.session_state`.
 3. **Embeddings**: SentenceTransformer encodes rows → `reduce_embeddings` condenses dimensions → Plotly visualizes `build_plot_df`.
-4. **Modeling**: Embeddings are averaged per original row, joined with numeric targets, and passed to `auto_cv_with_permutation`.
-5. **Report assembly**: `build_report_payload` stitches together whichever components the user ran (stats, embeddings note, modeling table) and emits HTML/Markdown for download or sharing.
+4. **Topic modeling (optional)**: BERTopic consumes the full embedding matrix plus raw texts → a clustering reducer (`UMAP` or `PCA`) plus HDBSCAN discovers clusters → c-TF-IDF terms summarize each topic. This reducer is separate from the document-level projection reducer in the `Embeddings` tab, though the app can optionally match the fitted topic reducer family/settings for a fresh display projection.
+5. **Modeling**: Embeddings are averaged per original row, joined with numeric targets, and passed to `auto_cv_with_permutation`.
+6. **Report assembly**: `build_report_payload` stitches together whichever components the user ran (stats, embeddings note, modeling table) and emits HTML/Markdown for download or sharing.
 
 This modular flow allows you to reuse outputs elsewhere (e.g., feed embeddings into downstream ML, export reports to collaborators, or call functions directly inside notebooks).
 
@@ -324,6 +356,7 @@ This modular flow allows you to reuse outputs elsewhere (e.g., feed embeddings i
   - `test_import.py`: guards package importability and exposed `__version__`.
   - `test_spacy_utils.py`: verifies `get_spacy_pipeline_base` returns a spaCy `Language` with a sentencizer even when downloads are disabled.
   - `test_modeling_task_control.py`: verifies forced task-mode behavior (`task_mode`, `target_task_overrides`) and small-class CV guardrails.
+  - `test_topic_modeling.py`: covers BERTopic integration helpers, topic summaries, dependency fallbacks, and projection/topic alignment.
 - **Suggested commands**:
 
 ```bash

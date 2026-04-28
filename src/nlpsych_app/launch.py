@@ -17,6 +17,15 @@ def main():
     if "STREAMLIT_CONFIG_DIR" not in os.environ:
         cfg_dir = files("nlpsych_app") / ".streamlit"
         os.environ["STREAMLIT_CONFIG_DIR"] = str(cfg_dir)
+    for env_key, env_value in {
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "TOKENIZERS_PARALLELISM": "false",
+    }.items():
+        os.environ.setdefault(env_key, env_value)
 
     app_path = files("nlpsych_app") / "app.py"
     subprocess.run([sys.executable, "-m", "streamlit", "run", str(app_path), *sys.argv[1:]], check=True)

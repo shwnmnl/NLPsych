@@ -5,6 +5,7 @@ import io
 import sys
 import textwrap
 import math
+from typing import List
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -36,6 +37,19 @@ from nlpsych.embedding import (
     build_plot_df,
     plot_projection,
 )
+from nlpsych.topic_modeling import (
+    build_topic_plot,
+    fit_topic_model,
+    build_topic_assignments,
+    summarize_topics as summarize_topics_table,
+    merge_topic_assignments,
+    resolve_projection_from_topic_match,
+    update_topic_representation,
+)
+from nlpsych_app.topic_state import (
+    clear_topic_state,
+    store_topic_results,
+)
 from plotly.subplots import make_subplots
 from nlpsych.modeling import auto_cv_with_permutation, apply_multiple_comparisons_correction
 from nlpsych.report import build_report_payload, interpret_model_row, summarize_model_row
@@ -59,7 +73,18 @@ def main():
         ss.setdefault("overall", None)
         ss.setdefault("meta_df", None)
         ss.setdefault("embeddings", None)
+        ss.setdefault("texts", None)
+        ss.setdefault("embedding_opts", None)
+        ss.setdefault("projection_opts", None)
         ss.setdefault("plot_df", None)
+        ss.setdefault("topic_model", None)
+        ss.setdefault("topic_assignments_df", None)
+        ss.setdefault("topic_summary_df", None)
+        ss.setdefault("cluster_opts", None)
+        ss.setdefault("topic_repr_opts", None)
+        ss.setdefault("topic_plot_fig", None)
+        ss.setdefault("topic_plot_kind", None)
+        ss.setdefault("topic_plot_opts", None)
         ss.setdefault("results_df", None)
         ss.setdefault("preds", None)
     _init_state()
@@ -80,7 +105,11 @@ def main():
         return get_st_model_base(model_name)
 
     @st.cache_data(show_spinner=False)
-    def embed_text_columns_simple_ui(series_list: List[pd.Series], model_name="all-MiniLM-L6-v2", normalize=True):
+    def embed_text_columns_simple_ui(
+        series_list: List[pd.Series],
+        model_name: str = "all-MiniLM-L6-v2",
+        normalize: bool = True,
+    ) -> tuple[pd.DataFrame, np.ndarray, list[str]]:
         return embed_text_columns_simple_base(series_list, model_name=model_name, normalize=normalize)
 
     # ===== Section: Utility for downloads =====
@@ -129,6 +158,13 @@ def main():
                 f"<div class=\"nlpsych-field-label\">{safe_label}</div>",
                 unsafe_allow_html=True,
             )
+
+    def render_cached_topic_plot(fig: object) -> None:
+        """Render a cached BERTopic visualization."""
+        if isinstance(fig, go.Figure):
+            st.plotly_chart(fig, width='stretch')
+            return
+        st.write(fig)
 
     # ===== Logo loading helper =====
     def load_logo_bytes(filename="NLPsych_logo.png") -> bytes:
@@ -395,7 +431,7 @@ def main():
         st.warning("Select at least one text column.")
         st.stop()
 
-    tabs = st.tabs(["Overview", "Descriptive stats", "Embeddings", "Modeling", "Report"])
+    tabs = st.tabs(["Overview", "Descriptive stats", "Embeddings", "Topics / Clusters", "Modeling", "Report"])
 
 
 
@@ -569,6 +605,28 @@ def main():
     with tabs[2]:
         st.subheader("Embeddings and projection")
 
+        cached_topic_model = st.session_state.get("topic_model")
+        cached_cluster_opts = st.session_state.get("cluster_opts")
+        topic_match_available = (
+            cached_topic_model is not None
+            and isinstance(cached_cluster_opts, dict)
+            and str(cached_cluster_opts.get("cluster_reduce_method", "")).lower() in {"umap", "pca"}
+        )
+        match_topic_reducer = False
+        if topic_match_available:
+            match_topic_reducer = st.checkbox(
+                "Match fitted topic reducer settings",
+                value=False,
+                help=(
+                    "Use the fitted BERTopic clustering reducer family and compatible settings "
+                    "for a fresh 2D/3D display projection."
+                ),
+            )
+        elif cached_topic_model is not None:
+            st.caption(
+                "Matched projection mode becomes available after fitting topics with a cached UMAP or PCA clustering reducer."
+            )
+
         col_a, col_b, col_c = st.columns(3)
         with col_a:
             embed_model_options = EMBEDDING_MODEL_OPTIONS + ["Custom"]
@@ -586,9 +644,20 @@ def main():
             else:
                 model_name = model_choice
         with col_b:
-            reduce_method = st.selectbox("Reduction method", ["pca", "umap", "tsne"])
+            if match_topic_reducer:
+                reduce_method = str(cached_cluster_opts.get("cluster_reduce_method", "umap")).lower()
+                st.text_input(
+                    "Projection reducer",
+                    value=reduce_method.upper(),
+                    disabled=True,
+                )
+            else:
+                reduce_method = st.selectbox(
+                    "Projection reducer",
+                    ["pca", "umap", "tsne"],
+                )
         with col_c:
-            n_components = st.selectbox("Dimensions", [2, 3], index=0)
+            n_components = st.selectbox("Projection dimensions", [2, 3], index=0)
 
         umap_n_neighbors = None
         umap_min_dist = None
@@ -597,9 +666,17 @@ def main():
         tsne_learning_rate = None
         tsne_n_iter = None
         tsne_metric = "cosine"
+        projection_random_state = 1
 
-        if reduce_method == "umap":
-            with st.expander("UMAP settings"):
+        if match_topic_reducer:
+            matched_reduce_method = str(cached_cluster_opts.get("cluster_reduce_method", "umap")).upper()
+            st.caption(
+                f"Matched projection mode is active. The plot will be refit with the fitted topic "
+                f"reducer family (`{matched_reduce_method}`) and compatible settings for `{int(n_components)}D` display. "
+                "This is not literal reuse of the BERTopic-fitted reducer unless the dimensions already match."
+            )
+        elif reduce_method == "umap":
+            with st.expander("Projection UMAP settings"):
                 _field_label(
                     "UMAP n_neighbors",
                     "Controls local vs global structure; higher favors global patterns.",
@@ -636,7 +713,7 @@ def main():
                     label_visibility="collapsed",
                 )
         elif reduce_method == "tsne":
-            with st.expander("t-SNE settings"):
+            with st.expander("Projection t-SNE settings"):
                 _field_label(
                     "Auto perplexity",
                     "Choose perplexity automatically based on sample size.",
@@ -710,11 +787,13 @@ def main():
 
         non_text_cols = [c for c in df.columns if c not in text_cols]
 
-        current_embed_opts = {
+        current_embedding_opts = {
             "model_name": model_name,
+            "text_cols": tuple(text_cols),
+        }
+        manual_projection_opts = {
             "reduce_method": reduce_method,
             "n_components": int(n_components),
-            "text_cols": tuple(text_cols),
             "umap_n_neighbors": int(umap_n_neighbors) if umap_n_neighbors is not None else None,
             "umap_min_dist": float(umap_min_dist) if umap_min_dist is not None else None,
             "umap_metric": umap_metric,
@@ -722,17 +801,37 @@ def main():
             "tsne_learning_rate": float(tsne_learning_rate) if tsne_learning_rate is not None else None,
             "tsne_n_iter": int(tsne_n_iter) if tsne_n_iter is not None else None,
             "tsne_metric": tsne_metric,
+            "random_state": int(projection_random_state),
+        }
+        current_projection_opts = resolve_projection_from_topic_match(
+            manual_projection_opts,
+            match_topic_reducer=match_topic_reducer,
+            cluster_opts=cached_cluster_opts,
+            default_random_state=projection_random_state,
+        )
+        current_embed_opts = {
+            **current_embedding_opts,
+            **current_projection_opts,
         }
 
         cached_meta = st.session_state.get("meta_df")
         cached_emb = st.session_state.get("embeddings")
+        cached_texts = st.session_state.get("texts")
         cached_plot_df = st.session_state.get("plot_df")
-        cached_embed_opts = st.session_state.get("embed_opts")
+        cached_embedding_opts = st.session_state.get("embedding_opts")
+        cached_projection_opts = st.session_state.get("projection_opts")
 
-        cache_is_fresh = (
-            _opts_same(cached_embed_opts, current_embed_opts)
+        cached_topic_assignments = st.session_state.get("topic_assignments_df")
+
+        embedding_cache_is_fresh = (
+            _opts_same(cached_embedding_opts, current_embedding_opts)
             and cached_meta is not None
             and cached_emb is not None
+            and cached_texts is not None
+        )
+        projection_cache_is_fresh = (
+            embedding_cache_is_fresh
+            and _opts_same(cached_projection_opts, current_projection_opts)
             and cached_plot_df is not None
         )
 
@@ -745,23 +844,70 @@ def main():
             ]
             stats_color_options = [f"Stats: {c}" for c in stats_numeric_cols]
 
+        topic_color_options: list[str] = []
+        if cached_topic_assignments is not None:
+            topic_color_options = ["topic_label", "topic_id", "is_outlier"]
+
+        def _compute_embeddings() -> tuple[pd.DataFrame, np.ndarray, list[str]]:
+            meta_df, emb, texts = embed_text_columns_simple_ui(
+                [df[c] for c in text_cols],
+                model_name=model_name,
+                normalize=True,
+            )
+            return meta_df, emb, texts
+
+        def _compute_projection(
+            meta_df: pd.DataFrame,
+            emb: np.ndarray,
+            texts: list[str],
+        ) -> pd.DataFrame:
+            projection_method = current_projection_opts["reduce_method"]
+            reduction_metric = "cosine"
+            if projection_method == "umap":
+                reduction_metric = current_projection_opts.get("umap_metric", "cosine")
+            elif projection_method == "tsne":
+                reduction_metric = current_projection_opts.get("tsne_metric", "cosine")
+            Z = reduce_embeddings(
+                embeddings=emb,
+                method=projection_method,
+                n_components=int(current_projection_opts["n_components"]),
+                random_state=int(current_projection_opts.get("random_state", 1)),
+                metric=reduction_metric,
+                umap_n_neighbors=current_projection_opts.get("umap_n_neighbors"),
+                umap_min_dist=current_projection_opts.get("umap_min_dist"),
+                tsne_perplexity=current_projection_opts.get("tsne_perplexity"),
+                tsne_learning_rate=current_projection_opts.get("tsne_learning_rate"),
+                tsne_n_iter=current_projection_opts.get("tsne_n_iter"),
+            )
+            plot_df = build_plot_df(Z, meta_df, texts)
+            return plot_df
+
+        def _store_embedding_results(meta_df: pd.DataFrame, emb: np.ndarray, texts: list[str]) -> None:
+            st.session_state["meta_df"] = meta_df
+            st.session_state["embeddings"] = emb
+            st.session_state["texts"] = texts
+            st.session_state["embedding_opts"] = current_embedding_opts
+
+        def _store_projection_results(plot_df: pd.DataFrame) -> None:
+            st.session_state["plot_df"] = plot_df
+            st.session_state["projection_opts"] = current_projection_opts
+            st.session_state["embed_opts"] = current_embed_opts
+
         style_col, plot_col = st.columns([1, 3])
         with style_col:
             if cached_plot_df is None:
                 button_label = "Compute embeddings"
             else:
                 button_label = "Recompute embeddings"
-            run_embed = st.button(button_label, key="btn_embed_compute", )
+            run_embed = st.button(button_label, key="btn_embed_compute")
 
-            if cache_is_fresh:
+            if projection_cache_is_fresh:
                 st.caption("Showing cached results. Styling changes do not require recompute.")
             elif cached_plot_df is not None:
                 st.caption("Cached results exist but options changed. Press Recompute embeddings to refresh.")
 
             st.markdown("**Plot styling**")
             try:
-                import inspect
-
                 if "height" in inspect.signature(st.container).parameters:
                     style_container = st.container(height=560, border=True)
                 else:
@@ -771,7 +917,13 @@ def main():
 
             with style_container:
                 plot_height = st.slider("Plot height (px)", min_value=350, max_value=1200, value=500, step=25)
-                color_by_options = ["source_column"] + non_text_cols + stats_color_options + ["None"]
+                color_by_options = (
+                    ["source_column"]
+                    + topic_color_options
+                    + non_text_cols
+                    + stats_color_options
+                    + ["None"]
+                )
                 color_by_choice = st.selectbox("Color points by", color_by_options, index=0)
                 point_size = st.slider("Point size", min_value=2, max_value=20, value=8)
                 point_opacity = st.slider("Point opacity", min_value=0.1, max_value=1.0, value=0.9, step=0.05)
@@ -815,8 +967,10 @@ def main():
                     inferred_type = "continuous" if pd.api.types.is_numeric_dtype(df[color_by_choice]) else "categorical"
                 elif color_by_choice.startswith("Stats: "):
                     inferred_type = "continuous"
-                elif color_by_choice in ("source_column", "index"):
+                elif color_by_choice in ("source_column", "index", "topic_label", "is_outlier"):
                     inferred_type = "categorical"
+                elif color_by_choice == "topic_id":
+                    inferred_type = "continuous"
 
                 if color_by_choice != "None":
                     show_continuous = color_mode == "Continuous" or (color_mode == "Auto" and inferred_type == "continuous")
@@ -979,50 +1133,727 @@ def main():
             emb_df = pd.concat([meta_df.reset_index(drop=True), emb_df], axis=1)
             df_to_csv_download(emb_df, "embeddings_with_meta.csv")
 
+        display_meta = cached_meta
+        display_emb = cached_emb
+        display_plot_df = cached_plot_df
+        plot_error = None
+
         if run_embed:
             try:
-                meta_df, emb, texts = embed_text_columns_simple_ui(
-                    [df[c] for c in text_cols],
-                    model_name=model_name,
-                    normalize=True
-                )
-                reduction_metric = "cosine"
-                if reduce_method == "umap":
-                    reduction_metric = umap_metric
-                elif reduce_method == "tsne":
-                    reduction_metric = tsne_metric
-                Z = reduce_embeddings(
-                    embeddings=emb,
-                    method=reduce_method,
-                    n_components=int(n_components),
-                    metric=reduction_metric,
-                    umap_n_neighbors=umap_n_neighbors,
-                    umap_min_dist=umap_min_dist,
-                    tsne_perplexity=tsne_perplexity,
-                    tsne_learning_rate=tsne_learning_rate,
-                    tsne_n_iter=tsne_n_iter,
-                )
-                plot_df = build_plot_df(Z, meta_df, texts)
-                with plot_col:
-                    _render_embed_block(plot_df, emb, meta_df, plot_style)
-
-                st.session_state["meta_df"] = meta_df
-                st.session_state["embeddings"] = emb
-                st.session_state["plot_df"] = plot_df
-                st.session_state["embed_opts"] = current_embed_opts
-            except Exception as e:
-                with plot_col:
-                    st.exception(e)
-        else:
-            with plot_col:
-                if cached_plot_df is None or cached_emb is None or cached_meta is None:
-                    st.info("Press Compute embeddings to generate embeddings and projection.")
+                if embedding_cache_is_fresh:
+                    meta_df = cached_meta
+                    emb = cached_emb
+                    texts = cached_texts
                 else:
-                    _render_embed_block(cached_plot_df, cached_emb, cached_meta, plot_style)
+                    meta_df, emb, texts = _compute_embeddings()
+                    clear_topic_state(st.session_state)
+                    _store_embedding_results(meta_df, emb, texts)
+                plot_df = _compute_projection(meta_df, emb, texts)
+                _store_projection_results(plot_df)
+                display_meta = meta_df
+                display_emb = emb
+                display_plot_df = plot_df
+            except Exception as e:
+                plot_error = e
+
+        if display_plot_df is not None and display_emb is not None and display_meta is not None:
+            if cached_topic_assignments is not None:
+                try:
+                    display_plot_df = merge_topic_assignments(display_plot_df, cached_topic_assignments)
+                except Exception:
+                    pass
+
+        with plot_col:
+            if plot_error is not None:
+                st.exception(plot_error)
+            elif display_plot_df is None or display_emb is None or display_meta is None:
+                st.info("Press Compute embeddings to generate embeddings and projection.")
+            else:
+                _render_embed_block(display_plot_df, display_emb, display_meta, plot_style)
+
+
+    # ===== Tab: Topics / Clusters =====
+    with tabs[3]:
+        st.subheader("Cluster discovery and topic modeling")
+
+        cached_meta = st.session_state.get("meta_df")
+        cached_emb = st.session_state.get("embeddings")
+        cached_texts = st.session_state.get("texts")
+        cached_embedding_opts = st.session_state.get("embedding_opts")
+        cached_topic_model = st.session_state.get("topic_model")
+        cached_topic_assignments = st.session_state.get("topic_assignments_df")
+        cached_topic_summary = st.session_state.get("topic_summary_df")
+        cached_cluster_opts = st.session_state.get("cluster_opts")
+        cached_topic_repr_opts = st.session_state.get("topic_repr_opts")
+        cached_topic_plot_fig = st.session_state.get("topic_plot_fig")
+        cached_topic_plot_kind = st.session_state.get("topic_plot_kind")
+        cached_topic_plot_opts = st.session_state.get("topic_plot_opts")
+        cached_plot_df = st.session_state.get("plot_df")
+        embedding_cache_ready = (
+            cached_meta is not None
+            and cached_emb is not None
+            and cached_texts is not None
+            and cached_embedding_opts is not None
+        )
+
+        def _render_topic_outputs(assignments_df: pd.DataFrame, summary_df: pd.DataFrame):
+            total_docs = int(len(assignments_df))
+            noise_mask = assignments_df["topic_id"].eq(-1)
+            noise_count = int(noise_mask.sum())
+            non_noise_topics = int(assignments_df.loc[~noise_mask, "topic_id"].nunique())
+            noise_share = float(noise_count / total_docs) if total_docs else 0.0
+
+            metric_cols = st.columns(4)
+            metric_cols[0].metric("Documents", f"{total_docs}")
+            metric_cols[1].metric("Non-noise topics", f"{non_noise_topics}")
+            metric_cols[2].metric("Noise documents", f"{noise_count}")
+            metric_cols[3].metric("Noise share", f"{noise_share:.1%}")
+
+            st.write("Topic summary")
+            st.dataframe(summary_df, width='stretch')
+            df_to_csv_download(summary_df, "topic_summary.csv", include_index=False)
+
+            st.write("Topic assignments")
+            st.dataframe(assignments_df, width='stretch')
+            df_to_csv_download(assignments_df, "topic_assignments.csv", include_index=False)
+
+        if embedding_cache_ready:
+            cached_model_name = cached_embedding_opts.get("model_name", "unknown model")
+            cached_text_cols = cached_embedding_opts.get("text_cols", ())
+            st.caption(
+                f"Using cached embeddings from `{cached_model_name}` on {len(cached_texts)} text cells "
+                f"across {len(cached_text_cols)} selected text column(s). "
+                "After fitting topics here, go back to `Embeddings` to color the projection by topic."
+            )
+        else:
+            st.info("Compute embeddings in the Embeddings tab first. This tab uses the current cached embeddings.")
+
+        cluster_col, cluster_results_col = st.columns([1, 3])
+        with cluster_col:
+            with st.expander("Clustering reducer", expanded=True):
+                _field_label(
+                    "Clustering reducer",
+                    "Reducer used inside BERTopic before HDBSCAN clustering.",
+                )
+                topic_cluster_reduce_method = st.selectbox(
+                    "Clustering reducer",
+                    ["umap", "pca"],
+                    index=0,
+                    label_visibility="collapsed",
+                    key="topic_tab_cluster_reduce_method",
+                )
+                _field_label(
+                    "Reducer dimensions",
+                    "Intermediate dimensionality passed into HDBSCAN.",
+                )
+                max_topic_reduce_dims = 50
+                if embedding_cache_ready:
+                    max_topic_reduce_dims = max(
+                        2,
+                        min(50, int(min(cached_emb.shape[0], cached_emb.shape[1]))),
+                    )
+                topic_cluster_reduce_n_components = int(st.number_input(
+                    "Reducer dimensions",
+                    min_value=2,
+                    max_value=max_topic_reduce_dims,
+                    value=min(5, max_topic_reduce_dims),
+                    step=1,
+                    label_visibility="collapsed",
+                    key="topic_tab_cluster_reduce_n_components",
+                ))
+                topic_umap_n_neighbors = 15
+                topic_umap_min_dist = 0.0
+                topic_umap_metric = "cosine"
+                if topic_cluster_reduce_method == "umap":
+                    _field_label(
+                        "UMAP n_neighbors",
+                        "Controls local vs global topic structure; higher values preserve broader neighborhoods.",
+                    )
+                    topic_umap_n_neighbors = int(st.number_input(
+                        "Topic UMAP n_neighbors",
+                        min_value=2,
+                        max_value=200,
+                        value=15,
+                        step=1,
+                        label_visibility="collapsed",
+                        key="topic_tab_umap_n_neighbors",
+                    ))
+                    _field_label(
+                        "UMAP min_dist",
+                        "Lower values keep local neighborhoods tighter before clustering.",
+                    )
+                    topic_umap_min_dist = float(st.number_input(
+                        "Topic UMAP min_dist",
+                        min_value=0.0,
+                        max_value=0.99,
+                        value=0.0,
+                        step=0.01,
+                        format="%.2f",
+                        label_visibility="collapsed",
+                        key="topic_tab_umap_min_dist",
+                    ))
+                    _field_label(
+                        "UMAP metric",
+                        "Distance metric used for the BERTopic clustering reducer.",
+                    )
+                    topic_umap_metric = st.selectbox(
+                        "Topic UMAP metric",
+                        ["cosine", "euclidean", "manhattan"],
+                        index=0,
+                        label_visibility="collapsed",
+                        key="topic_tab_umap_metric",
+                    )
+
+            with st.expander("HDBSCAN settings"):
+                _field_label(
+                    "HDBSCAN min_cluster_size",
+                    "Minimum number of documents required to form a cluster.",
+                )
+                topic_hdbscan_min_cluster_size = int(st.number_input(
+                    "HDBSCAN min_cluster_size",
+                    min_value=2,
+                    max_value=200,
+                    value=10,
+                    step=1,
+                    label_visibility="collapsed",
+                    key="topic_tab_hdbscan_min_cluster_size",
+                ))
+                _field_label(
+                    "HDBSCAN min_samples",
+                    "Auto uses HDBSCAN defaults; lower values usually produce more clusters.",
+                )
+                auto_min_samples = st.checkbox(
+                    "Auto min_samples",
+                    value=True,
+                    key="topic_tab_auto_min_samples",
+                )
+                topic_hdbscan_min_samples = None
+                if not auto_min_samples:
+                    topic_hdbscan_min_samples = int(st.number_input(
+                        "HDBSCAN min_samples",
+                        min_value=1,
+                        max_value=200,
+                        value=5,
+                        step=1,
+                        label_visibility="collapsed",
+                        key="topic_tab_hdbscan_min_samples",
+                    ))
+
+            with st.expander("Topic representation settings"):
+                _field_label(
+                    "Top words per topic",
+                    "Number of c-TF-IDF terms to retain in each topic representation.",
+                )
+                topic_top_n_words = int(st.number_input(
+                    "Top words per topic",
+                    min_value=3,
+                    max_value=20,
+                    value=10,
+                    step=1,
+                    label_visibility="collapsed",
+                    key="topic_tab_top_n_words",
+                ))
+                _field_label(
+                    "N-gram range",
+                    "Choose unigram-only labels or allow bigrams in topic representations.",
+                )
+                ngram_range_label = st.selectbox(
+                    "N-gram range",
+                    ["1-1", "1-2"],
+                    index=1,
+                    label_visibility="collapsed",
+                    key="topic_tab_ngram_range",
+                )
+                st.caption(
+                    "English topic-term cleanup is enabled by default: stopword filtering, "
+                    "frequent-word downweighting, `max_df=0.9`, lowercase normalization, "
+                    "unicode accent stripping, and auto `min_df` (1 for tiny corpora, otherwise 2)."
+                )
+
+            current_cluster_opts = {
+                "cluster_reduce_method": topic_cluster_reduce_method,
+                "cluster_reduce_n_components": int(topic_cluster_reduce_n_components),
+                "umap_n_neighbors": int(topic_umap_n_neighbors) if topic_cluster_reduce_method == "umap" else None,
+                "umap_min_dist": float(topic_umap_min_dist) if topic_cluster_reduce_method == "umap" else None,
+                "umap_metric": topic_umap_metric if topic_cluster_reduce_method == "umap" else None,
+                "hdbscan_min_cluster_size": int(topic_hdbscan_min_cluster_size),
+                "hdbscan_min_samples": int(topic_hdbscan_min_samples) if topic_hdbscan_min_samples is not None else None,
+                "random_state": 42,
+            }
+            current_topic_repr_opts = {
+                "top_n_words": int(topic_top_n_words),
+                "ngram_range": (1, 1) if ngram_range_label == "1-1" else (1, 2),
+            }
+
+            cluster_results_exist = (
+                cached_topic_model is not None
+                and cached_topic_assignments is not None
+                and cached_topic_summary is not None
+            )
+            cluster_fit_cache_is_current = (
+                embedding_cache_ready
+                and cluster_results_exist
+                and _opts_same(cached_cluster_opts, current_cluster_opts)
+            )
+            cluster_repr_cache_is_current = (
+                cluster_fit_cache_is_current
+                and _opts_same(cached_topic_repr_opts, current_topic_repr_opts)
+            )
+
+            discover_topics = st.button(
+                "Discover clusters/topics",
+                key="btn_topic_discover",
+                disabled=not embedding_cache_ready,
+            )
+            refresh_topic_terms = st.button(
+                "Refresh topic terms",
+                key="btn_topic_refresh_terms",
+                disabled=not (
+                    cluster_fit_cache_is_current
+                    and embedding_cache_ready
+                ),
+                help=(
+                    "Rebuild c-TF-IDF topic labels with the current representation settings "
+                    "without recomputing the fitted clustering reducer or HDBSCAN clusters."
+                ),
+            )
+
+            if cluster_repr_cache_is_current:
+                st.caption("Showing cached cluster/topic results.")
+            elif cluster_fit_cache_is_current:
+                st.caption(
+                    "Clusters are current, but topic-term settings changed. "
+                    "Press Refresh topic terms to relabel topics without reclustering."
+                )
+            elif cluster_results_exist and embedding_cache_ready:
+                st.caption(
+                    "Cached cluster/topic results exist but clustering settings changed. "
+                    "Press Discover clusters/topics to refit BERTopic."
+                )
+
+        topic_error = None
+        if refresh_topic_terms:
+            try:
+                if (
+                    not embedding_cache_ready
+                    or cached_topic_model is None
+                    or cached_topic_assignments is None
+                    or cached_topic_summary is None
+                    or not _opts_same(cached_cluster_opts, current_cluster_opts)
+                ):
+                    raise RuntimeError(
+                        "Current clusters are stale or unavailable. Recompute clusters before refreshing topic terms."
+                    )
+                topic_model_obj = update_topic_representation(
+                    cached_topic_model,
+                    cached_texts,
+                    topics=cached_topic_assignments["topic_id"].tolist(),
+                    top_n_words=current_topic_repr_opts["top_n_words"],
+                    ngram_range=current_topic_repr_opts["ngram_range"],
+                )
+                refreshed_topics = np.asarray(
+                    getattr(topic_model_obj, "topics_", cached_topic_assignments["topic_id"].to_numpy()),
+                    dtype=int,
+                )
+                refreshed_probs = getattr(topic_model_obj, "probabilities_", None)
+                topic_assignments_df = build_topic_assignments(
+                    cached_meta,
+                    cached_texts,
+                    refreshed_topics,
+                    refreshed_probs,
+                    topic_model_obj,
+                )
+                topic_summary_df = summarize_topics_table(
+                    topic_model_obj,
+                    topic_assignments_df,
+                )
+                store_topic_results(
+                    st.session_state,
+                    topic_model=topic_model_obj,
+                    topic_assignments_df=topic_assignments_df,
+                    topic_summary_df=topic_summary_df,
+                    cluster_opts=current_cluster_opts,
+                    topic_repr_opts=current_topic_repr_opts,
+                )
+                st.rerun()
+            except Exception as e:
+                topic_error = e
+
+        if discover_topics:
+            try:
+                if not embedding_cache_ready:
+                    raise RuntimeError("Compute embeddings in the Embeddings tab first.")
+                topic_model_obj, topic_ids, topic_probs = fit_topic_model(
+                    cached_texts,
+                    cached_emb,
+                    cluster_reduce_method=current_cluster_opts["cluster_reduce_method"],
+                    cluster_reduce_n_components=current_cluster_opts["cluster_reduce_n_components"],
+                    umap_n_neighbors=current_cluster_opts["umap_n_neighbors"] or 15,
+                    umap_min_dist=current_cluster_opts["umap_min_dist"] or 0.0,
+                    umap_metric=current_cluster_opts["umap_metric"] or "cosine",
+                    hdbscan_min_cluster_size=current_cluster_opts["hdbscan_min_cluster_size"],
+                    hdbscan_min_samples=current_cluster_opts["hdbscan_min_samples"],
+                    top_n_words=current_topic_repr_opts["top_n_words"],
+                    ngram_range=current_topic_repr_opts["ngram_range"],
+                    random_state=current_cluster_opts["random_state"],
+                )
+                topic_assignments_df = build_topic_assignments(
+                    cached_meta,
+                    cached_texts,
+                    topic_ids,
+                    topic_probs,
+                    topic_model_obj,
+                )
+                topic_summary_df = summarize_topics_table(
+                    topic_model_obj,
+                    topic_assignments_df,
+                )
+                store_topic_results(
+                    st.session_state,
+                    topic_model=topic_model_obj,
+                    topic_assignments_df=topic_assignments_df,
+                    topic_summary_df=topic_summary_df,
+                    cluster_opts=current_cluster_opts,
+                    topic_repr_opts=current_topic_repr_opts,
+                )
+                st.rerun()
+            except Exception as e:
+                topic_error = e
+
+        with cluster_results_col:
+            if topic_error is not None:
+                st.exception(topic_error)
+            elif cluster_results_exist and embedding_cache_ready:
+                _render_topic_outputs(cached_topic_assignments, cached_topic_summary)
+            else:
+                st.info("Discover clusters/topics to fit BERTopic on the current cached embeddings.")
+
+        if cluster_results_exist and embedding_cache_ready and topic_error is None:
+            available_topic_ids = [
+                int(topic_id)
+                for topic_id in cached_topic_summary["topic_id"].tolist()
+                if int(topic_id) != -1
+            ] if "topic_id" in cached_topic_summary.columns else []
+
+            st.markdown("**BERTopic visualizations**")
+            st.caption(
+                "BERTopic visualizations are topic-model diagnostics and are distinct from the "
+                "document projection in `Embeddings`."
+            )
+            st.caption(
+                "The intertopic map is a topic-level 2D visualization generated by BERTopic, "
+                "not the same as the document-level projection."
+            )
+
+            if not available_topic_ids:
+                st.info("No non-noise topics are available to visualize yet.")
+            else:
+                topic_plot_reduced_embeddings = None
+                if isinstance(cached_plot_df, pd.DataFrame):
+                    dim_cols = [c for c in cached_plot_df.columns if c.startswith("dim_")]
+                    if len(dim_cols) == 2 and len(cached_plot_df) == len(cached_texts):
+                        try:
+                            plot_text_ok = True
+                            if "text" in cached_plot_df.columns:
+                                plot_text_ok = cached_plot_df["text"].reset_index(drop=True).equals(pd.Series(cached_texts))
+                            if plot_text_ok:
+                                topic_plot_reduced_embeddings = cached_plot_df[dim_cols].to_numpy(dtype=float)
+                        except Exception:
+                            topic_plot_reduced_embeddings = None
+
+                plot_label_to_kind = {
+                    "Intertopic distance map": "intertopic_map",
+                    "Topic word scores": "barchart",
+                    "Topic similarity heatmap": "heatmap",
+                    "Topic hierarchy": "hierarchy",
+                    "Term score decline": "term_rank",
+                    "Documents": "documents",
+                }
+                plot_control_col, plot_display_col = st.columns([1.15, 1.85])
+                with plot_control_col:
+                    plot_label = st.selectbox(
+                        "Plot type",
+                        list(plot_label_to_kind.keys()),
+                        key="topic_plot_type",
+                    )
+                    topic_plot_kind = plot_label_to_kind[plot_label]
+
+                    plot_topics = None
+                    plot_top_n_topics = None
+                    plot_use_ctfidf = None
+                    plot_n_words = None
+                    plot_autoscale = None
+                    plot_n_clusters = None
+                    plot_orientation = None
+                    plot_log_scale = None
+                    plot_sample = None
+                    plot_hide_annotations = None
+                    plot_hide_document_hover = None
+                    plot_reuse_projection = False
+
+                    supports_subset_mode = topic_plot_kind not in {"term_rank"}
+                    if supports_subset_mode:
+                        topic_subset_mode = st.selectbox(
+                            "Topic subset",
+                            ["All topics", "Top N topics", "Selected topic IDs"],
+                            key="topic_plot_subset_mode",
+                        )
+                        if topic_subset_mode == "All topics":
+                            plot_topics = None
+                        elif topic_subset_mode == "Top N topics":
+                            plot_top_n_topics = int(st.number_input(
+                                "Top N topics",
+                                min_value=1,
+                                max_value=max(1, len(available_topic_ids)),
+                                value=min(8, len(available_topic_ids)),
+                                step=1,
+                                key="topic_plot_top_n_topics",
+                            ))
+                        else:
+                            plot_topics = st.multiselect(
+                                "Selected topic IDs",
+                                options=available_topic_ids,
+                                default=[],
+                                key="topic_plot_selected_topics",
+                            )
+                    else:
+                        plot_topics = st.multiselect(
+                            "Highlighted topic IDs",
+                            options=available_topic_ids,
+                            default=[],
+                            key="topic_plot_term_rank_topics",
+                        )
+                        if not plot_topics:
+                            plot_topics = None
+
+                    if topic_plot_kind == "intertopic_map":
+                        plot_use_ctfidf = st.checkbox(
+                            "Use c-TF-IDF space",
+                            value=False,
+                            key="topic_plot_use_ctfidf_topics",
+                        )
+                    elif topic_plot_kind == "barchart":
+                        plot_n_words = int(st.number_input(
+                            "Words per topic",
+                            min_value=3,
+                            max_value=20,
+                            value=5,
+                            step=1,
+                            key="topic_plot_n_words",
+                        ))
+                        plot_autoscale = st.checkbox(
+                            "Autoscale label height",
+                            value=False,
+                            key="topic_plot_autoscale",
+                        )
+                    elif topic_plot_kind == "heatmap":
+                        cluster_heatmap = st.checkbox(
+                            "Order by topic clusters",
+                            value=False,
+                            key="topic_plot_heatmap_cluster_ordering",
+                        )
+                        if cluster_heatmap:
+                            plot_n_clusters = int(st.number_input(
+                                "Heatmap clusters",
+                                min_value=1,
+                                max_value=max(1, len(available_topic_ids)),
+                                value=min(max(1, len(available_topic_ids)), 8),
+                                step=1,
+                                key="topic_plot_heatmap_n_clusters",
+                            ))
+                        plot_use_ctfidf = st.checkbox(
+                            "Use c-TF-IDF space",
+                            value=False,
+                            key="topic_plot_use_ctfidf_heatmap",
+                        )
+                    elif topic_plot_kind == "hierarchy":
+                        plot_orientation = st.selectbox(
+                            "Orientation",
+                            ["left", "bottom"],
+                            index=0,
+                            key="topic_plot_hierarchy_orientation",
+                        )
+                        plot_use_ctfidf = st.checkbox(
+                            "Use c-TF-IDF space",
+                            value=True,
+                            key="topic_plot_use_ctfidf_hierarchy",
+                        )
+                    elif topic_plot_kind == "term_rank":
+                        plot_log_scale = st.checkbox(
+                            "Log scale",
+                            value=False,
+                            key="topic_plot_log_scale",
+                        )
+                    elif topic_plot_kind == "documents":
+                        plot_sample = float(st.slider(
+                            "Sample share per topic",
+                            min_value=0.05,
+                            max_value=1.0,
+                            value=1.0,
+                            step=0.05,
+                            key="topic_plot_documents_sample",
+                        ))
+                        plot_hide_annotations = st.checkbox(
+                            "Hide topic annotations",
+                            value=False,
+                            key="topic_plot_documents_hide_annotations",
+                        )
+                        plot_hide_document_hover = st.checkbox(
+                            "Hide document hover text",
+                            value=False,
+                            key="topic_plot_documents_hide_hover",
+                        )
+                        if topic_plot_reduced_embeddings is not None:
+                            plot_reuse_projection = st.checkbox(
+                                "Reuse current cached 2D projection",
+                                value=False,
+                                key="topic_plot_documents_use_cached_projection",
+                            )
+                            st.caption(
+                                "Off by default. When disabled, the app computes a stable 2D "
+                                "PCA projection from the cached embeddings for BERTopic's "
+                                "document view."
+                            )
+                        else:
+                            st.caption(
+                                "The app will compute a stable 2D PCA projection from the cached "
+                                "embeddings before calling BERTopic's document view."
+                            )
+                    default_plot_titles = {
+                        "intertopic_map": "<b>Intertopic Distance Map</b>",
+                        "barchart": "<b>Topic Word Scores</b>",
+                        "heatmap": "<b>Similarity Matrix</b>",
+                        "hierarchy": "<b>Hierarchical Clustering</b>",
+                        "term_rank": "<b>Term score decline per Topic</b>",
+                        "documents": "<b>Documents and Topics</b>",
+                    }
+                    default_plot_sizes = {
+                        "intertopic_map": (650, 650),
+                        "barchart": (250, 250),
+                        "heatmap": (800, 800),
+                        "hierarchy": (1000, 600),
+                        "term_rank": (800, 500),
+                        "documents": (1200, 750),
+                    }
+                    default_width, default_height = default_plot_sizes[topic_plot_kind]
+                    with st.expander("Advanced options"):
+                        plot_title = st.text_input(
+                            "Plot title",
+                            value=default_plot_titles[topic_plot_kind],
+                            key="topic_plot_title",
+                        )
+                        plot_width = int(st.number_input(
+                            "Plot width",
+                            min_value=200,
+                            max_value=2400,
+                            value=default_width,
+                            step=50,
+                            key="topic_plot_width",
+                        ))
+                        plot_height = int(st.number_input(
+                            "Plot height",
+                            min_value=200,
+                            max_value=2400,
+                            value=default_height,
+                            step=50,
+                            key="topic_plot_height",
+                        ))
+
+                    current_topic_plot_opts = {
+                        "docs_source": "cached_texts",
+                        "topics": tuple(int(topic_id) for topic_id in plot_topics) if plot_topics is not None else None,
+                        "top_n_topics": int(plot_top_n_topics) if plot_top_n_topics is not None else None,
+                        "use_ctfidf": plot_use_ctfidf,
+                        "n_words": int(plot_n_words) if plot_n_words is not None else None,
+                        "autoscale": plot_autoscale,
+                        "n_clusters": int(plot_n_clusters) if plot_n_clusters is not None else None,
+                        "orientation": plot_orientation,
+                        "log_scale": plot_log_scale,
+                        "sample": plot_sample,
+                        "hide_annotations": plot_hide_annotations,
+                        "hide_document_hover": plot_hide_document_hover,
+                        "use_reduced_embeddings": bool(plot_reuse_projection),
+                        "title": plot_title,
+                        "width": int(plot_width),
+                        "height": int(plot_height),
+                    }
+                    topic_plot_cache_is_current = (
+                        cluster_repr_cache_is_current
+                        and cached_topic_plot_fig is not None
+                        and cached_topic_plot_kind == topic_plot_kind
+                        and _opts_same(cached_topic_plot_opts, current_topic_plot_opts)
+                    )
+
+                    generate_topic_plot = st.button(
+                        "Generate plot",
+                        key="btn_topic_generate_plot",
+                        disabled=not cluster_results_exist,
+                    )
+
+                    if topic_plot_cache_is_current:
+                        st.caption("Showing cached BERTopic visualization.")
+                    elif cached_topic_plot_fig is not None:
+                        st.caption("BERTopic plot settings changed. Press Generate plot to refresh the visualization.")
+
+                topic_plot_error = None
+                if generate_topic_plot:
+                    try:
+                        plot_embeddings = None
+                        plot_reduced_embeddings = None
+                        plot_docs = None
+                        if topic_plot_kind == "documents":
+                            plot_docs = cached_texts
+                            if current_topic_plot_opts["use_reduced_embeddings"]:
+                                plot_reduced_embeddings = topic_plot_reduced_embeddings
+                            else:
+                                plot_embeddings = cached_emb
+                        if plot_embeddings is not None:
+                            plot_reduced_embeddings = reduce_embeddings(
+                                np.asarray(plot_embeddings),
+                                method="pca",
+                                n_components=2,
+                                random_state=1,
+                            )
+                            plot_embeddings = None
+                        topic_plot_fig = build_topic_plot(
+                            cached_topic_model,
+                            topic_plot_kind,
+                            docs=plot_docs,
+                            topics=current_topic_plot_opts["topics"],
+                            embeddings=plot_embeddings,
+                            reduced_embeddings=plot_reduced_embeddings,
+                            top_n_topics=current_topic_plot_opts["top_n_topics"],
+                            sample=current_topic_plot_opts["sample"],
+                            hide_annotations=current_topic_plot_opts["hide_annotations"],
+                            hide_document_hover=current_topic_plot_opts["hide_document_hover"],
+                            use_ctfidf=current_topic_plot_opts["use_ctfidf"],
+                            n_words=current_topic_plot_opts["n_words"],
+                            autoscale=current_topic_plot_opts["autoscale"],
+                            n_clusters=current_topic_plot_opts["n_clusters"],
+                            orientation=current_topic_plot_opts["orientation"],
+                            log_scale=current_topic_plot_opts["log_scale"],
+                            title=current_topic_plot_opts["title"],
+                            width=current_topic_plot_opts["width"],
+                            height=current_topic_plot_opts["height"],
+                        )
+                        st.session_state["topic_plot_fig"] = topic_plot_fig
+                        st.session_state["topic_plot_kind"] = topic_plot_kind
+                        st.session_state["topic_plot_opts"] = current_topic_plot_opts
+                        st.rerun()
+                    except Exception as e:
+                        topic_plot_error = e
+
+                with plot_display_col:
+                    if topic_plot_error is not None:
+                        st.exception(topic_plot_error)
+                    elif topic_plot_cache_is_current:
+                        render_cached_topic_plot(cached_topic_plot_fig)
+                    else:
+                        st.info("Choose a BERTopic plot and press Generate plot.")
 
 
     # ===== Tab: Modeling =====
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("Predictive modeling with cross validation and permutation test")
         st.caption("Uses embeddings as features. Select a non text target column.")
 
@@ -2180,7 +3011,7 @@ def main():
 
 
     # ===== Tab: Report =====
-    with tabs[4]:
+    with tabs[5]:
         st.subheader("Session report")
         st.caption("Summarizes what you ran and adds brief interpretations.")
 

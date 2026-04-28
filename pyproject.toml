@@ -35,9 +35,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+topics = [
+  "bertopic>=0.16",
+  "hdbscan>=0.8",
+]
 # Extra dependencies for running the Streamlit app
 app = [
   "streamlit>=1.39",
+  "bertopic>=0.16",
+  "hdbscan>=0.8",
 ]
 dev = ["pytest>=8", "ruff>=0.5", "black>=24"]
 

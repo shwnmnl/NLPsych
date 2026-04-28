@@ -118,17 +118,28 @@ def reduce_embeddings(
             warnings.warn("UMAP not available. Falling back to PCA.", RuntimeWarning)
             method = "pca"
         else:
-            umap_kwargs = {
-                "n_components": n_components,
-                "metric": metric,
-                "random_state": random_state,
-            }
-            if umap_n_neighbors is not None:
-                umap_kwargs["n_neighbors"] = int(umap_n_neighbors)
-            if umap_min_dist is not None:
-                umap_kwargs["min_dist"] = float(umap_min_dist)
-            reducer = umap.UMAP(**umap_kwargs)
-            return reducer.fit_transform(embeddings)
+            if n <= (n_components + 1):
+                warnings.warn(
+                    "Too few samples for a stable UMAP projection. Falling back to PCA.",
+                    RuntimeWarning,
+                )
+                method = "pca"
+            else:
+                resolved_n_neighbors = 15 if umap_n_neighbors is None else int(umap_n_neighbors)
+                resolved_n_neighbors = max(2, min(resolved_n_neighbors, n - 1))
+                umap_kwargs = {
+                    "n_components": n_components,
+                    "metric": metric,
+                    "random_state": random_state,
+                    "n_neighbors": resolved_n_neighbors,
+                    "init": "random",
+                    "low_memory": True,
+                    "n_jobs": 1,
+                }
+                if umap_min_dist is not None:
+                    umap_kwargs["min_dist"] = float(umap_min_dist)
+                reducer = umap.UMAP(**umap_kwargs)
+                return reducer.fit_transform(embeddings)
 
     if method == "tsne":
         n = len(embeddings)
