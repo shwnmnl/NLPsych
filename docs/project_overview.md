@@ -182,35 +182,27 @@ src/
 pip install nlpsych
 ```
 
-This installs the `nlpsych` package with dependencies such as pandas, spaCy 3.8, scikit-learn, statsmodels, SentenceTransformers, UMAP, Plotly, and Tabulate.
+This installs the full NLPsych runtime: the library, Streamlit app, topic modeling stack, and core analysis dependencies such as pandas, spaCy 3.8, scikit-learn, statsmodels, SentenceTransformers, UMAP, Plotly, BERTopic, HDBSCAN, and Tabulate.
 Use lowercase in commands and imports (`nlpsych`, `nlpsych_app`).
-
-### Topic modeling extra
-
-```bash
-pip install "nlpsych[topics]"
-```
-
-The `[topics]` extra adds BERTopic and HDBSCAN so you can discover clusters/topics directly from cached sentence embeddings in Python code.
 
 ### Streamlit app
 
 ```bash
-pip install "nlpsych[app]"
+pip install nlpsych
 nlpsych-app
 ```
 
-The `[app]` extra adds Streamlit and wires up the `nlpsych-app` console entry point (`src/nlpsych_app/launch.py`). The launcher ensures Streamlit exists, points to the packaged `.streamlit` config directory, and runs `streamlit run` on the packaged `nlpsych_app/app.py`.
+The package wires up the `nlpsych-app` console entry point (`src/nlpsych_app/launch.py`). The launcher ensures Streamlit exists, points to the packaged `.streamlit` config directory, and runs `streamlit run` on the packaged `nlpsych_app/app.py`.
 
 ### Local development
 
 ```bash
 git clone https://github.com/shwnmnl/nlpsych.git
 cd nlpsych
-pip install -e ".[app,dev]"
+pip install -e ".[dev]"
 ```
 
-- `.[app,dev]` gives you the UI plus formatting/testing tools (`ruff`, `black`, `pytest`).
+- `.[dev]` gives you the full app/runtime plus formatting/testing tools (`ruff`, `black`, `pytest`).
 - Run the app from source with `streamlit run streamlit_app.py`.
 - For Streamlit Community Cloud, set the main file path to `streamlit_app.py`.
 
@@ -237,7 +229,7 @@ meta_df, emb, texts = embed_text_columns_simple([df["note"]])
 Z = reduce_embeddings(emb, method="pca", n_components=2)
 plot_df = build_plot_df(Z, meta_df, texts)
 
-# 3. Topic modeling (optional; requires nlpsych[topics])
+# 3. Topic modeling
 topic_model, topics, probs = fit_topic_model(
     texts,
     emb,

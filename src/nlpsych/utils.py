@@ -4,6 +4,15 @@ import spacy
 import warnings
 from functools import lru_cache
 
+
+def _blank_english_pipeline() -> spacy.Language:
+    """Return a minimal English pipeline with sentence segmentation only."""
+    nlp = spacy.blank("en")
+    if "sentencizer" not in nlp.pipe_names:
+        nlp.add_pipe("sentencizer")
+    return nlp
+
+
 @lru_cache(maxsize=1)
 def get_spacy_pipeline_base(allow_download: bool = True) -> spacy.Language:
     """
@@ -19,12 +28,8 @@ def get_spacy_pipeline_base(allow_download: bool = True) -> spacy.Language:
     -------
     spacy.Language
         Loaded spaCy pipeline with ``ner`` and ``parser`` excluded and a
-        ``sentencizer`` component ensured.
-
-    Raises
-    ------
-    RuntimeError
-        If the model is unavailable and cannot be downloaded.
+        ``sentencizer`` component ensured. Falls back to a blank English
+        pipeline when ``en_core_web_sm`` is unavailable.
     """
     def _load():
         """
@@ -53,14 +58,20 @@ def get_spacy_pipeline_base(allow_download: bool = True) -> spacy.Language:
                 )
                 return _load()
             except Exception as e:
-                raise RuntimeError(
-                    "Failed to download spaCy model en_core_web_sm. "
-                ) from e
-        raise RuntimeError(
-            "spaCy model en_core_web_sm not installed"
+                warnings.warn(
+                    "Failed to download spaCy model en_core_web_sm. Falling back "
+                    "to a blank English tokenizer-only pipeline.",
+                    RuntimeWarning,
+                )
+                return _blank_english_pipeline()
+        warnings.warn(
+            "spaCy model en_core_web_sm not installed. Falling back to a blank "
+            "English tokenizer-only pipeline.",
+            RuntimeWarning,
         )
+        return _blank_english_pipeline()
 
-        
+
 def get_st_model_base(model_name: str = "all-MiniLM-L6-v2", allow_download: bool = True) -> SentenceTransformer:
     """
     Load a SentenceTransformer model for text embedding.

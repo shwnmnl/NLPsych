@@ -1,6 +1,6 @@
 """
 nlpsych: Tools for text analysis, embeddings, and lightweight modeling,
-with optional Streamlit app for interactive use.
+with an integrated Streamlit app for interactive use.
 """
 
 from importlib.metadata import version

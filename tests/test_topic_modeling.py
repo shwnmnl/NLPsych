@@ -197,7 +197,7 @@ def _sample_topic_inputs():
 def test_fit_topic_model_raises_clear_error_when_optional_deps_missing(monkeypatch):
     monkeypatch.setattr(topic_modeling, "HAS_BERTOPIC", False)
 
-    with pytest.raises(RuntimeError, match=r'nlpsych\[topics\]'):
+    with pytest.raises(RuntimeError, match=r'pip install nlpsych'):
         fit_topic_model(["doc one"], np.array([[1.0, 0.0, 0.0]]))
 
 

@@ -4,10 +4,10 @@
 
 <h1 align="center">NLPsych</h1>
 
-NLPsych (*Natural Language Psychometrics*) lets you upload a CSV file, pick your text columns, and get instant descriptive statistics, visualize semantic embeddings, and run predictive models all in one streamlined workflow.
+NLPsych (*Natural Language Psychometrics*) lets you upload a CSV file, pick your text columns, and get instant descriptive statistics, visualize semantic embeddings, discover topics automatically, and run predictive models all in one streamlined workflow.
 
 > **Warning**
-> `pip install` releases of NLPsych should be treated as unstable for now. If you want to use NLPsych today, prefer running it from source locally. The public demo can also be used for exploration, but it runs on third-party servers, so avoid uploading sensitive data there.
+> `pip install` releases of NLPsych should be treated as unstable for now. If you want to use NLPsych today, prefer running it from source locally (cloning the repo). The public demo can also be used for exploration, but it runs on third-party servers, so avoid uploading sensitive data there.
 
 ## ⚙️ Features
 - 📊 Descriptive statistics: word counts, sentence lengths, lexical diversity
@@ -16,20 +16,12 @@ NLPsych (*Natural Language Psychometrics*) lets you upload a CSV file, pick your
 - 🤖 Modeling: auto/forced classification-vs-regression, CV safeguards, and permutation tests
 - 📑 Reports: HTML/Markdown outputs with per-target interpretations and example write-up sentences
 
-💡 Tip: If you only need the functions, install via pip. If you want the interactive app, clone the repo and run it with Streamlit.
+## 📦 Installation
 
-## 📦 Installation (library only)
-
-To use NLPsych functions in your own Python code:
+To install the full NLPsych product (library + Streamlit app + topic modeling):
 
 ```bash
 pip install nlpsych
-```
-
-To add BERTopic-based cluster discovery on top of the library:
-
-```bash
-pip install "nlpsych[topics]"
 ```
 
 Use lowercase in commands and imports (`nlpsych`, `nlpsych_app`).
@@ -39,20 +31,19 @@ Use lowercase in commands and imports (`nlpsych`, `nlpsych_app`).
 Installed package:
 
 ```bash
-pip install "nlpsych[app]"
 nlpsych-app
 ```
 
 From this repo (source/dev or Streamlit Cloud-style entrypoint):
 
 ```bash
-pip install -e ".[app]"
+pip install -e .
 streamlit run streamlit_app.py
 ```
 
 For Streamlit Community Cloud, set the main file path to `streamlit_app.py`.
 
-## 🛠 Example Usage (library)
+## 🛠 Example Usage
 ```python
 import pandas as pd
 from nlpsych.descriptive_stats import descriptive_stats

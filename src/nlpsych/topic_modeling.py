@@ -57,7 +57,7 @@ def _require_topic_modeling_dependencies(
         raise RuntimeError(
             "Topic modeling requires optional dependencies "
             f"({missing_str}). Install them with "
-            '`pip install "nlpsych[topics]"` or add the missing packages manually.'
+            "`pip install nlpsych` or add the missing packages manually."
         )
 
 
