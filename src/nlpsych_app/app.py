@@ -56,6 +56,7 @@ from nlpsych.report import build_report_payload, interpret_model_row, summarize_
 
 
 ASSETS = files("nlpsych_app") / "assets"
+TEMP_DEMO_CSV = _SRC_ROOT.parent / "demo_data" / "nlpsych_dp_demo.csv"
 EMBEDDING_MODEL_OPTIONS = [
     "all-MiniLM-L6-v2",
     "all-mpnet-base-v2",
@@ -394,30 +395,11 @@ def main():
             df = pd.read_csv(uploaded)
     else:
         if use_demo:
-            df = pd.DataFrame(
-                {
-                    "text_a": [
-                        "Hello world. This is a tiny test.",
-                        "I propose a simple method for estimating brain connectivity. Results suggest strong default mode network involvement. However, the sample was small.",
-                        "lol that movie was unreal, i could not believe the ending tbh",
-                        "Patient denies chest pain. Vitals stable. Recommend follow up in two weeks.",
-                        "Consider the problem of induction. How can we justify any expectation of regularity",
-                        "A sudden pang of memory, a ripple on the surface of thought, and then stillness.",
-                    ],
-                    "text_b": [
-                        "Buy now and save big. Limited time offer.",
-                        "Deep reinforcement learning agents can overfit. Regularization and data augmentation help.",
-                        "Today I made pasta with garlic and olive oil. It was perfect.",
-                        "To be is to be perceived, said Bishop Berkeley.",
-                        "The quick brown fox jumps over the lazy dog.",
-                        "This is a very very very repetitive sentence sentence sentence.",
-                    ],
-                    "target_a": [0, 1, 0, 1, 0, 1],
-                    "target_b": [1, 1, 0, 0, 1, 0],
-                    "target_continuous": [0.12, 1.85, 0.47, 2.25, 1.08, 0.33],
-                }
-            )
-            st.info("Using built in demo data")
+            if not TEMP_DEMO_CSV.exists():
+                st.error(f"Temporary demo file not found: {TEMP_DEMO_CSV}")
+                st.stop()
+            df = pd.read_csv(TEMP_DEMO_CSV)
+            st.info("Using temporary demo CSV from the repository")
         else:
             st.stop()
 
